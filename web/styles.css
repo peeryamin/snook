@@ -701,17 +701,18 @@ body {
   gap: 0.85rem;
   width: 100%;
   padding: 0.9rem 1rem;
-  border: 1px solid var(--border-color);
+  border: 1px solid rgba(37, 99, 235, 0.45);
   border-radius: var(--border-radius-lg);
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(16, 185, 129, 0.08));
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.18), rgba(16, 185, 129, 0.2));
   transition: var(--transition);
   cursor: pointer;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.24);
 }
 
 .friendly-toggle:hover {
   border-color: var(--primary-color);
-  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.28);
 }
 
 .friendly-toggle-input {
@@ -724,11 +725,12 @@ body {
   width: 44px;
   height: 24px;
   border-radius: 999px;
-  background: var(--surface-hover);
-  border: 1px solid var(--border-color);
+  background: rgba(51, 65, 85, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   position: relative;
   flex-shrink: 0;
   transition: var(--transition);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 
 .friendly-toggle-switch::after {
@@ -745,8 +747,9 @@ body {
 }
 
 .friendly-toggle-input:checked + .friendly-toggle-switch {
-  background: var(--success-color);
-  border-color: var(--success-color);
+  background: linear-gradient(135deg, var(--success-color), #059669);
+  border-color: rgba(255, 255, 255, 0.25);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.22);
 }
 
 .friendly-toggle-input:checked + .friendly-toggle-switch::after {
