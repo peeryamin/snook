@@ -614,6 +614,7 @@ app.delete('/api/admin/tables/:id', authenticateToken, requireAdmin, async (req,
 // Tables management
 app.get('/api/tables', async (req, res) => {
   try {
+    res.setHeader('Cache-Control', 'no-store');
     const db = await getDB();
     const tables = await db.all('SELECT * FROM tables ORDER BY id');
     
@@ -716,7 +717,7 @@ app.post('/api/table/:id/start', async (req, res) => {
       `, tableId, startTime, is_friendly ? 1 : 0, customer_name, normalizedPhone,
         notes, startTime, discount_percent, payment_method);
 
-      await db.run('UPDATE tables SET status = "OCCUPIED", light_on = 1, updated_at = ? WHERE id = ?', startTime, tableId);
+      await db.run('UPDATE tables SET status = ?, light_on = 1, updated_at = ? WHERE id = ?', 'OCCUPIED', startTime, tableId);
 
       const session = await db.get('SELECT * FROM sessions WHERE id = ?', sessionResult.lastID);
       const updatedTable = await db.get('SELECT * FROM tables WHERE id = ?', tableId);
@@ -863,7 +864,7 @@ app.post('/api/table/:id/stop', async (req, res) => {
         WHERE id = ?
       `, endTime, totalDurationMs, billedMinutes, finalAmount, payment_method, discount_percent, paymentStatus, session.id);
 
-      await db.run('UPDATE tables SET status = "AVAILABLE", light_on = 0, updated_at = ? WHERE id = ?', endTime, tableId);
+      await db.run('UPDATE tables SET status = ?, light_on = 0, updated_at = ? WHERE id = ?', 'AVAILABLE', endTime, tableId);
 
       const today = new Date().toISOString().slice(0, 10);
       if (session.customer_name && !session.is_friendly) {
@@ -2488,7 +2489,7 @@ app.post('/api/lights/:id/toggle', authenticateToken, async (req, res) => {
         VALUES (?, ?, 0, ?)
       `, tableId, startTime, startTime);
       
-      await db.run('UPDATE tables SET status = "OCCUPIED" WHERE id = ?', tableId);
+      await db.run('UPDATE tables SET status = ? WHERE id = ?', 'OCCUPIED', tableId);
       
       broadcast('session:auto_start', {
         table_id: tableId,
@@ -2517,7 +2518,7 @@ app.post('/api/lights/:id/toggle', authenticateToken, async (req, res) => {
           WHERE id = ?
         `, endTime, totalMs, minutes, amount, session.id);
         
-        await db.run('UPDATE tables SET status = "AVAILABLE" WHERE id = ?', tableId);
+        await db.run('UPDATE tables SET status = ? WHERE id = ?', 'AVAILABLE', tableId);
         
         // Update daily summary
         const today = new Date().toISOString().slice(0, 10);

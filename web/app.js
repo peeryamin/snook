@@ -233,11 +233,142 @@ class App {
   patchTableFromApi(table, activeSession = null) {
     const idx = this.tables.findIndex((t) => t.id === table.id);
     if (idx === -1) return;
-    this.tables[idx] = {
+    const next = {
       ...this.tables[idx],
       ...table,
       active_session: activeSession !== undefined ? activeSession : this.tables[idx].active_session
     };
+    if (next.status !== 'OCCUPIED') {
+      next.active_session = null;
+      next.running_amount = 0;
+      next.running_data = null;
+    }
+    this.tables[idx] = next;
+  }
+
+  mergeTablesFromApi(incoming) {
+    if (!Array.isArray(incoming) || incoming.length === 0) return;
+    const incomingById = new Map(incoming.map((t) => [t.id, t]));
+
+    if (!this.tables.length) {
+      this.tables = incoming;
+      return;
+    }
+
+    this.tables = this.tables.map((local) => {
+      const remote = incomingById.get(local.id);
+      if (!remote) return local;
+
+      const localActive = local.status === 'OCCUPIED' && local.active_session;
+      const remoteActive = remote.status === 'OCCUPIED' && remote.active_session;
+
+      // Stale API (e.g. another Vercel instance) — keep a session we still know is running
+      if (localActive && !remoteActive) {
+        return {
+          ...remote,
+          status: 'OCCUPIED',
+          active_session: local.active_session,
+          running_amount: local.running_amount,
+          running_data: local.running_data
+        };
+      }
+
+      return {
+        ...local,
+        ...remote,
+        active_session: remoteActive ? remote.active_session : null
+      };
+    });
+  }
+
+  async refreshAuxiliaryData() {
+    const headers = this.auth.getAuthHeaders();
+    const today = this.todayDateString();
+    const [summaryRes, sessionsRes, playersRes] = await Promise.all([
+      fetch('/api/summary/today', { headers }),
+      fetch(`/api/sessions?date=${today}&limit=100`, { headers }),
+      fetch('/api/players/today', { headers })
+    ]);
+
+    if ([summaryRes, sessionsRes, playersRes].some((r) => r.status === 401)) {
+      this.auth.handleAuthError();
+      return;
+    }
+
+    this.todaySummary = await summaryRes.json();
+    const sessionsPayload = await sessionsRes.json();
+    this.sessions = sessionsPayload.sessions || [];
+    const playersPayload = await playersRes.json();
+    this.players = playersPayload.players || [];
+
+    this.renderSessions();
+    this.renderPending();
+    this.renderPlayers();
+    this.updateStats();
+  }
+
+  upsertSessionRecord(session) {
+    if (!session) return;
+    const table = this.tables.find((t) => t.id === session.table_id);
+    const enriched = {
+      ...session,
+      table_name: table ? this.getTableName(table) : `Table ${session.table_id}`
+    };
+    const idx = this.sessions.findIndex((s) => s.id === session.id);
+    if (idx >= 0) this.sessions[idx] = { ...this.sessions[idx], ...enriched };
+    else this.sessions.unshift(enriched);
+  }
+
+  handleRealtimeEvent(event, e) {
+    try {
+      const data = JSON.parse(e.data);
+      if (event === 'session:start' && data.table && data.session) {
+        this.patchTableFromApi(data.table, data.session);
+        this.renderTables();
+        clearTimeout(this.loadDataTimer);
+        this.refreshAuxiliaryData();
+        return;
+      }
+      if (event === 'session:stop' && data.table) {
+        this.patchTableFromApi(data.table, null);
+        this.renderTables();
+        if (data.session) this.upsertSessionRecord(data.session);
+        clearTimeout(this.loadDataTimer);
+        this.refreshAuxiliaryData();
+        return;
+      }
+      if ((event === 'session:pause' || event === 'session:resume') && data.table_id) {
+        clearTimeout(this.loadDataTimer);
+        this.refreshTableById(data.table_id);
+        return;
+      }
+      if (event === 'session:paid' && data.session) {
+        this.upsertSessionRecord(data.session);
+        this.renderSessions();
+        this.renderPending();
+        this.updateStats();
+        return;
+      }
+      if (event === 'table:update' && data.id) {
+        this.patchTableFromApi(data, data.status === 'OCCUPIED' ? data.active_session : null);
+        this.renderTables();
+        return;
+      }
+    } catch (_) {
+      /* fall through */
+    }
+    this.scheduleLoadData();
+  }
+
+  async refreshTableById(tableId) {
+    const headers = this.auth.getAuthHeaders();
+    const res = await fetch('/api/tables', { headers });
+    if (res.status === 401) return this.auth.handleAuthError();
+    if (!res.ok) return;
+    const incoming = await res.json();
+    if (!Array.isArray(incoming)) return;
+    this.mergeTablesFromApi(incoming);
+    this.renderTables();
   }
 
   async loadData() {
@@ -265,8 +396,14 @@ class App {
 
       if (generation !== this.loadDataGeneration) return;
 
-      this.tables = await tablesRes.json();
-      if (!Array.isArray(this.tables)) this.tables = [];
+      const incomingTables = await tablesRes.json();
+      if (!Array.isArray(incomingTables)) {
+        this.tables = [];
+      } else if (!this.tables.length) {
+        this.tables = incomingTables;
+      } else {
+        this.mergeTablesFromApi(incomingTables);
+      }
 
       this.todaySummary = await summaryRes.json();
       const sessionsPayload = await sessionsRes.json();
@@ -300,7 +437,7 @@ class App {
     this.eventSource.addEventListener('connected', () => this.setOnline(true));
     this.eventSource.onerror = () => this.setOnline(false);
     ['session:start', 'session:stop', 'session:pause', 'session:resume', 'session:paid', 'table:update'].forEach((evt) => {
-      this.eventSource.addEventListener(evt, () => this.scheduleLoadData());
+      this.eventSource.addEventListener(evt, (e) => this.handleRealtimeEvent(evt, e));
     });
   }
 
@@ -538,7 +675,7 @@ class App {
       this.renderTables();
     }
     clearTimeout(this.loadDataTimer);
-    await this.loadData();
+    await this.refreshAuxiliaryData();
   }
 
   showStopModal(tableId) {
@@ -579,8 +716,9 @@ class App {
       this.patchTableFromApi(data.table, null);
       this.renderTables();
     }
+    if (data.session) this.upsertSessionRecord(data.session);
     clearTimeout(this.loadDataTimer);
-    await this.loadData();
+    await this.refreshAuxiliaryData();
   }
 
   async markPaid(sessionId) {
@@ -592,7 +730,7 @@ class App {
     const data = await res.json();
     if (!res.ok) return this.toast(data.error || 'Failed to update payment', 'error');
     this.toast('Payment confirmed', 'success');
-    await this.loadData();
+    await this.refreshAuxiliaryData();
   }
 
   async pauseSession(tableId) {
@@ -613,7 +751,7 @@ class App {
       const data = await res.json();
       return this.toast(data.error || `Failed to ${action}`, 'error');
     }
-    await this.loadData();
+    await this.refreshTableById(tableId);
   }
 
   async setStatus(tableId, status) {
@@ -623,7 +761,7 @@ class App {
       body: JSON.stringify({ status })
     });
     if (!res.ok) return this.toast('Failed to update table', 'error');
-    await this.loadData();
+    await this.refreshTableById(tableId);
   }
 
   setupAutocomplete() {
