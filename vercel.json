@@ -2,7 +2,7 @@
   "version": 2,
   "functions": {
     "api/index.js": {
-      "maxDuration": 800,
+      "maxDuration": 300,
       "includeFiles": "server/**"
     }
   },
