@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <title>Black Racks Snooker Club by Zaid</title>
+  <meta name="theme-color" content="#1a1a1a">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <link rel="stylesheet" href="/styles.css?v=3" />
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then((regs) => regs.forEach((r) => r.unregister()));
+      caches.keys().then((keys) => keys.forEach((k) => caches.delete(k)));
+    }
+    if (!localStorage.getItem('auth_token')) {
+      window.location.replace('/login.html');
+    }
+  </script>
+</head>
+<body>
+  <div id="loading-screen" class="loading-screen">
+    <div class="loading-spinner"></div>
+    <p>Loading dashboard...</p>
+  </div>
+
+  <div id="app" class="app-container" style="display: none;">
+    <header class="topbar">
+      <div class="topbar-left">
+        <h1>Black Racks Snooker Club by Zaid</h1>
+        <div class="connection-status" id="connection-status">
+          <span class="status-dot offline"></span>
+          <span class="status-text">Connecting...</span>
+        </div>
+      </div>
+
+      <div class="topbar-stats">
+        <div class="stat-card earnings locked-stat" id="earnings-stat">
+          <div class="stat-label">Today's Earnings</div>
+          <div class="stat-value masked" id="total-earnings">****</div>
+          <button type="button" class="btn btn-sm btn-outline" id="view-earnings-btn">View Today's Earnings</button>
+        </div>
+        <div class="stat-card breakdown locked-stat" id="breakdown-stat">
+          <div class="stat-label">By Table</div>
+          <div class="stat-value masked" id="earnings-breakdown">****</div>
+        </div>
+        <div class="stat-card sessions">
+          <div class="stat-label">Sessions</div>
+          <div class="stat-value" id="session-count">0</div>
+        </div>
+        <div class="stat-card active">
+          <div class="stat-label">Players Today</div>
+          <div class="stat-value" id="player-count">0</div>
+        </div>
+      </div>
+
+      <div class="topbar-controls">
+        <button type="button" class="btn btn-secondary btn-sm" id="refresh-btn">Refresh</button>
+        <div class="user-menu">
+          <button type="button" class="btn btn-user" id="user-menu-btn">
+            <span class="user-name" id="user-name">Admin</span>
+          </button>
+          <div class="user-dropdown" id="user-dropdown">
+            <button type="button" class="dropdown-item" id="logout-btn">Logout</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <section class="tables-section" id="tables-section">
+        <div id="tables-grid" class="tables-grid black-racks"></div>
+      </section>
+
+      <section class="quick-actions">
+        <div class="live-clock" id="live-clock">--:--:--</div>
+      </section>
+
+      <section class="history-section" id="pending-section">
+        <div class="section-header">
+          <h2>Awaiting Payment</h2>
+          <span class="section-subtitle" id="pending-summary">0 bills pending</span>
+        </div>
+        <div class="table-container">
+          <table class="sessions-table">
+            <thead>
+              <tr>
+                <th>Table</th>
+                <th>Player</th>
+                <th>Amount</th>
+                <th>Method</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="pending-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="history-section" id="history-section">
+        <div class="section-header">
+          <h2>Today's Sessions</h2>
+        </div>
+        <div class="table-container">
+          <table class="sessions-table" id="sessions-table">
+            <thead>
+              <tr>
+                <th>Table</th>
+                <th>Name</th>
+                <th>Phone</th>
+                <th>Start</th>
+                <th>End</th>
+                <th>Duration</th>
+                <th>Amount</th>
+                <th>Method</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="sessions-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="history-section" id="players-section">
+        <div class="section-header">
+          <h2>Players Today</h2>
+        </div>
+        <div class="table-container">
+          <table class="sessions-table">
+            <thead>
+              <tr>
+                <th>Player ID</th>
+                <th>Name</th>
+                <th>Phone</th>
+                <th>Sessions</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody id="players-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="start-session-modal" class="modal">
+    <div class="modal-content modal-compact">
+      <div class="modal-header">
+        <h3>Start Session</h3>
+        <button type="button" class="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <form id="start-session-form" class="modal-body">
+        <input type="hidden" id="selected-table-id">
+        <div class="form-group">
+          <label>Table</label>
+          <div id="selected-table-info" class="table-info-box"></div>
+        </div>
+        <div class="form-group">
+          <label for="customer-name">Player Name</label>
+          <div class="autocomplete-container">
+            <input type="text" id="customer-name" class="form-control" placeholder="Enter player name" autocomplete="off" required>
+            <div id="customer-suggestions" class="autocomplete-suggestions"></div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="customer-phone-local">Phone (optional)</label>
+          <div class="phone-input-group">
+            <span class="phone-prefix">+91</span>
+            <input type="tel" id="customer-phone-local" class="form-control" placeholder="98765 43210" maxlength="10" inputmode="numeric">
+          </div>
+          <small class="form-hint">10 digits only. Cannot start with 0.</small>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="is-friendly">
+            <span class="checkmark"></span>
+            Friendly game (no billing)
+          </label>
+        </div>
+        <div class="modal-actions modal-actions-polished">
+          <button type="button" class="btn btn-secondary btn-lg modal-close">Cancel</button>
+          <button type="submit" class="btn btn-primary btn-lg">Start Session</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="stop-session-modal" class="modal">
+    <div class="modal-content modal-compact">
+      <div class="modal-header">
+        <h3>Stop and Bill</h3>
+        <button type="button" class="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="stop-table-id">
+        <div class="session-summary" id="session-summary"></div>
+        <div class="form-group">
+          <label for="final-payment-method">How will they pay?</label>
+          <select id="final-payment-method" class="form-control">
+            <option value="CASH">Cash</option>
+            <option value="UPI">UPI</option>
+            <option value="CARD">Card</option>
+          </select>
+          <small class="form-hint">Payment is recorded as pending until you confirm it was received.</small>
+        </div>
+        <div class="modal-actions modal-actions-polished">
+          <button type="button" class="btn btn-secondary btn-lg modal-close">Cancel</button>
+          <button type="button" class="btn btn-primary btn-lg" id="confirm-stop">Stop and Save Bill</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="password-modal" class="modal">
+    <div class="modal-content modal-compact">
+      <div class="modal-header">
+        <h3>Admin Password Required</h3>
+        <button type="button" class="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="form-hint">Enter your admin password to view today's earnings.</p>
+        <div class="form-group">
+          <label for="earnings-password">Password</label>
+          <input type="password" id="earnings-password" class="form-control" autocomplete="current-password">
+        </div>
+        <p class="error-text" id="earnings-password-error" style="display:none;"></p>
+        <div class="modal-actions modal-actions-polished">
+          <button type="button" class="btn btn-secondary btn-lg modal-close">Cancel</button>
+          <button type="button" class="btn btn-primary btn-lg" id="confirm-earnings-password">Unlock</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container" class="toast-container"></div>
+  <script src="/app.js?v=3"></script>
+</body>
+</html>

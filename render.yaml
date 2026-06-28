@@ -1,0 +1,39 @@
+# Deploy on Render: https://render.com
+# 1. Push this repo to GitHub
+# 2. Render Dashboard -> New -> Blueprint -> connect repo
+# 3. Set CORS_ORIGIN to your Render URL after first deploy
+
+services:
+  - type: web
+    name: black-racks-snooker
+    runtime: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node server.js
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 10000
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DB_PATH
+        value: /var/data/parlor.db
+      - key: CORS_ORIGIN
+        sync: false
+      - key: REPORT_EMAIL_TO
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+    disk:
+      name: black-racks-db
+      mountPath: /var/data
+      sizeGB: 1
