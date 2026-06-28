@@ -1,4 +1,14 @@
 let appHandler;
+let migrated = false;
+
+async function ensureMigrations() {
+  if (migrated) return;
+  const dbMod = await import('../server/db.js');
+  if (dbMod && typeof dbMod.migrate === 'function') {
+    await dbMod.migrate();
+  }
+  migrated = true;
+}
 
 async function getApp() {
   if (!appHandler) {
@@ -9,6 +19,13 @@ async function getApp() {
 }
 
 export default async function handler(req, res) {
-  const app = await getApp();
-  return app(req, res);
+  try {
+    await ensureMigrations();
+    const app = await getApp();
+    return app(req, res);
+  } catch (err) {
+    console.error('❌ Handler error:', err);
+    res.statusCode = 500;
+    res.end('Internal server error');
+  }
 }
