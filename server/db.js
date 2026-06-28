@@ -5,7 +5,7 @@ import path from 'path';
 import url from 'url';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'parlor.db');
+const DB_PATH = process.env.DB_PATH || (process.env.VERCEL ? '/tmp/parlor.db' : path.join(__dirname, 'parlor.db'));
 const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
 
 const BLACK_RACKS_TABLES = [

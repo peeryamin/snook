@@ -7,7 +7,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import path from 'path';
-import url from 'url';
+import { fileURLToPath } from 'url';
 import { getDB, migrate, closeDB, backupDatabase } from './db.js';
 import { validatePhone } from './phone.js';
 import { upsertDailyPlayer, searchDailyPlayers } from './players.js';
@@ -15,14 +15,11 @@ import { scheduleDailyReset } from './dailyReset.js';
 
 dotenv.config();
 
-const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 8080;
-const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-  console.error('JWT_SECRET environment variable is required. Copy server/.env.example to server/.env');
-  process.exit(1);
-}
+const JWT_SECRET = process.env.JWT_SECRET || 'black-racks-dev-secret-change-in-production';
 const app = express();
+const isMainModule = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 // Security middleware
 app.use(helmet({
@@ -2922,4 +2919,8 @@ async function startServer() {
   }
 }
 
-startServer();
+if (isMainModule) {
+  startServer();
+}
+
+export { app };
