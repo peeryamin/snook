@@ -54,7 +54,7 @@
       </div>
 
       <div class="topbar-controls">
-        <button type="button" class="btn btn-secondary btn-sm" id="refresh-btn">Hard Refresh</button>
+        <button type="button" class="btn btn-danger btn-sm" id="refresh-btn">Hard Reset</button>
         <div class="user-menu">
           <button type="button" class="btn btn-user" id="user-menu-btn">
             <span class="user-name" id="user-name">Admin</span>
@@ -170,9 +170,9 @@
           <small class="form-hint">10 digits only. Cannot start with 0.</small>
         </div>
         <div class="form-group">
-          <label class="checkbox-label friendly-toggle" for="is-friendly">
-            <input type="checkbox" id="is-friendly">
-            <span class="checkmark" aria-hidden="true"></span>
+          <label class="friendly-toggle" for="is-friendly">
+            <input type="checkbox" id="is-friendly" class="friendly-toggle-input">
+            <span class="friendly-toggle-switch" aria-hidden="true"></span>
             <span class="friendly-toggle-text">
               <span class="friendly-toggle-title">Friendly game</span>
               <span class="friendly-toggle-subtitle">No billing</span>

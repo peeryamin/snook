@@ -539,7 +539,7 @@ app.get('/api/tables', async (req, res) => {
     const enriched = await Promise.all(tables.map(async (table) => {
       const runningData = await computeRunningAmount(table);
       const activeSession = await db.get(`
-        SELECT id, customer_name, start_time, last_resume_time, paused_ms, is_friendly, break_count 
+        SELECT id, customer_name, start_time, last_resume_time, duration_ms, paused_ms, is_friendly, break_count 
         FROM sessions 
         WHERE table_id = ? AND end_time IS NULL 
         ORDER BY id DESC LIMIT 1
@@ -686,9 +686,10 @@ app.post('/api/table/:id/pause', async (req, res) => {
       UPDATE sessions SET 
         duration_ms = ?,
         last_resume_time = NULL,
+        paused_ms = ?,
         break_count = break_count + 1
       WHERE id = ?
-    `, newDuration, session.id);
+    `, newDuration, (session.paused_ms || 0) + additionalMs, session.id);
     
     broadcast('session:pause', { table_id: tableId, session_id: session.id });
     
@@ -884,8 +885,8 @@ app.get('/api/summary/today', async (req, res) => {
     let activeEarnings = 0;
     for (const session of activeSessions) {
       if (!session.is_friendly) {
-        const elapsed = now() - (session.last_resume_time || session.start_time);
-        const totalMs = (session.duration_ms || 0) + elapsed - (session.paused_ms || 0);
+        const elapsed = session.last_resume_time ? now() - session.last_resume_time : 0;
+        const totalMs = (session.duration_ms || 0) + elapsed;
         const minutes = Math.max(0, ceilToMinute(totalMs));
         activeEarnings += calculateBillAmount(session, minutes, {
           isFriendly: session.is_friendly,

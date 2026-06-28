@@ -81,6 +81,7 @@ class App {
     this.suggestionIndex = -1;
     this.suggestions = [];
     this.earningsUnlocked = sessionStorage.getItem('earnings_unlocked') === 'true';
+    this.pendingPasswordAction = null;
   }
 
   async init() {
@@ -99,7 +100,7 @@ class App {
   }
 
   bindEvents() {
-    document.getElementById('refresh-btn')?.addEventListener('click', () => this.loadData());
+    document.getElementById('refresh-btn')?.addEventListener('click', () => this.showRefreshPasswordModal());
     document.getElementById('logout-btn')?.addEventListener('click', () => this.auth.logout());
     document.getElementById('confirm-stop')?.addEventListener('click', () => this.confirmStop());
     document.getElementById('start-session-form')?.addEventListener('submit', (e) => this.submitStart(e));
@@ -130,15 +131,36 @@ class App {
     setInterval(tick, 1000);
   }
 
+  showRefreshPasswordModal() {
+    this.pendingPasswordAction = 'refresh';
+    this.showPasswordModal('Admin Password Required', 'Enter your admin password to hard refresh the dashboard.');
+  }
+
   showEarningsPasswordModal() {
     if (this.earningsUnlocked) {
       this.lockEarnings();
       return;
     }
-    document.getElementById('earnings-password').value = '';
-    document.getElementById('earnings-password-error').style.display = 'none';
+    this.pendingPasswordAction = 'earnings';
+    this.showPasswordModal('Admin Password Required', 'Enter your admin password to view today\'s earnings.');
+  }
+
+  showPasswordModal(title, hint) {
+    const inputEl = document.getElementById('earnings-password');
+    const errEl = document.getElementById('earnings-password-error');
+    const titleEl = document.getElementById('password-modal-title');
+    const hintEl = document.getElementById('password-modal-hint');
+
+    if (titleEl) titleEl.textContent = title;
+    if (hintEl) hintEl.textContent = hint;
+    if (inputEl) inputEl.value = '';
+    if (errEl) {
+      errEl.textContent = '';
+      errEl.style.display = 'none';
+    }
+
     document.getElementById('password-modal').classList.add('show');
-    document.getElementById('earnings-password').focus();
+    inputEl?.focus();
   }
 
   async unlockEarnings() {
@@ -159,9 +181,17 @@ class App {
       return;
     }
 
+    document.getElementById('password-modal').classList.remove('show');
+
+    if (this.pendingPasswordAction === 'refresh') {
+      this.pendingPasswordAction = null;
+      window.location.reload(true);
+      return;
+    }
+
+    this.pendingPasswordAction = null;
     this.earningsUnlocked = true;
     sessionStorage.setItem('earnings_unlocked', 'true');
-    document.getElementById('password-modal').classList.remove('show');
     this.updateStats();
     this.toast('Earnings unlocked', 'success');
   }
@@ -321,10 +351,10 @@ class App {
 
   startTimer(tableId, session) {
     if (this.timers.has(tableId)) clearInterval(this.timers.get(tableId));
-    const start = session.last_resume_time || session.start_time;
-    const paused = session.paused_ms || 0;
+    const baseMs = Number(session.duration_ms || 0);
     const tick = () => {
-      const elapsed = Math.max(0, Date.now() - start - paused);
+      const activeMs = session.last_resume_time ? Date.now() - session.last_resume_time : 0;
+      const elapsed = Math.max(0, baseMs + activeMs);
       const el = document.querySelector(`.session-timer[data-table-id="${tableId}"]`);
       if (!el) return;
       const m = Math.floor(elapsed / 60000);
@@ -453,7 +483,7 @@ class App {
     const table = this.tables.find((t) => t.id === tableId);
     if (!table?.active_session) return;
     const session = table.active_session;
-    const elapsed = Date.now() - (session.last_resume_time || session.start_time) - (session.paused_ms || 0);
+    const elapsed = Number(session.duration_ms || 0) + (session.last_resume_time ? Date.now() - session.last_resume_time : 0);
     const minutes = Math.ceil(elapsed / 60000);
     const perMin = Math.round(minutes * this.getRatePerMinute(table));
     const amount = this.calculateBill(table, minutes, session.is_friendly);

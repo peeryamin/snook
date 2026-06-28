@@ -695,43 +695,78 @@ body {
   font-weight: bold;
 }
 
-.checkbox-label.friendly-toggle {
-  justify-content: flex-start;
+.friendly-toggle {
+  display: flex;
+  align-items: center;
   gap: 0.85rem;
-  padding: 0.9rem 1rem;
+  padding: 0.95rem 1rem;
   border: 1px solid var(--border-color);
   border-radius: var(--border-radius-lg);
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(16, 185, 129, 0.08));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.1), rgba(16, 185, 129, 0.12));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   transition: var(--transition);
+  cursor: pointer;
 }
 
-.checkbox-label.friendly-toggle:hover {
+.friendly-toggle:hover {
   border-color: var(--primary-color);
   transform: translateY(-1px);
   box-shadow: var(--shadow);
 }
 
-.checkbox-label.friendly-toggle .friendly-toggle-text {
+.friendly-toggle-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.friendly-toggle-switch {
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(100, 116, 139, 0.8), rgba(51, 65, 85, 0.95));
+  position: relative;
+  flex-shrink: 0;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: var(--transition);
+}
+
+.friendly-toggle-switch::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  transition: var(--transition);
+}
+
+.friendly-toggle-input:checked + .friendly-toggle-switch {
+  background: linear-gradient(135deg, var(--primary-color), var(--success-color));
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.18);
+}
+
+.friendly-toggle-input:checked + .friendly-toggle-switch::after {
+  transform: translateX(20px);
+}
+
+.friendly-toggle-text {
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
 }
 
-.checkbox-label.friendly-toggle .friendly-toggle-title {
-  font-weight: 600;
+.friendly-toggle-title {
+  font-weight: 700;
   color: var(--text-color);
 }
 
-.checkbox-label.friendly-toggle .friendly-toggle-subtitle {
+.friendly-toggle-subtitle {
   font-size: 0.75rem;
   color: var(--text-muted);
-}
-
-.checkbox-label.friendly-toggle input[type="checkbox"]:checked + .checkmark {
-  background: var(--success-color);
-  border-color: var(--success-color);
-  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.2);
 }
 
 /* Modals */
