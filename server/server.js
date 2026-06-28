@@ -8,7 +8,7 @@ import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getDB, migrate, closeDB, backupDatabase } from './db.js';
+import { getDB, migrate, closeDB, backupDatabase, withTransaction } from './db.js';
 import { validatePhone } from './phone.js';
 import { upsertDailyPlayer, searchDailyPlayers } from './players.js';
 import { scheduleDailyReset } from './dailyReset.js';
@@ -183,7 +183,12 @@ const getTableDisplayName = (table) => table.name || `Table ${table.id}`;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function todayDateString() {
-  return new Date().toISOString().slice(0, 10);
+  const tz = process.env.CLUB_TIMEZONE;
+  if (tz) {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date());
+  }
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function parseReportDate(input) {
@@ -668,9 +673,9 @@ app.patch('/api/table/:id/status', requireAdmin, async (req, res) => {
 app.post('/api/table/:id/start', async (req, res) => {
   try {
     const tableId = parseInt(req.params.id);
-    const { 
-      is_friendly = false, 
-      customer_name = null, 
+    const {
+      is_friendly = false,
+      customer_name = null,
       customer_phone = null,
       notes = null,
       discount_percent = 0,
@@ -685,51 +690,53 @@ app.post('/api/table/:id/start', async (req, res) => {
       }
       normalizedPhone = phoneCheck.phone;
     }
-    
-    const db = await getDB();
-    const table = await db.get('SELECT * FROM tables WHERE id = ?', tableId);
-    
-    if (!table) {
-      return res.status(404).json({ error: 'Table not found' });
-    }
-    
-    if (table.status === 'OCCUPIED') {
-      return res.status(409).json({ error: 'Table already occupied' });
-    }
-    
-    if (table.status === 'MAINTENANCE') {
-      return res.status(409).json({ error: 'Table under maintenance' });
-    }
-    
-    const startTime = now();
-    
-    // Create session
-    const sessionResult = await db.run(`
-      INSERT INTO sessions (
-        table_id, start_time, is_friendly, customer_name, customer_phone,
-        notes, last_resume_time, discount_percent, payment_method
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, tableId, startTime, is_friendly ? 1 : 0, customer_name, normalizedPhone, 
-       notes, startTime, discount_percent, payment_method);
-    
-    // Update table status
-    await db.run('UPDATE tables SET status = "OCCUPIED", light_on = 1 WHERE id = ?', tableId);
-    
-    const session = await db.get('SELECT * FROM sessions WHERE id = ?', sessionResult.lastID);
-    const updatedTable = await db.get('SELECT * FROM tables WHERE id = ?', tableId);
-    
-    // Hardware integration
-    await controlTableLight(tableId, true);
-    
-    broadcast('session:start', { session, table: updatedTable });
-    
-    res.json({ 
-      success: true, 
-      session, 
-      table: updatedTable,
-      message: `Session started on Table ${tableId}` 
+
+    const result = await withTransaction(async (db) => {
+      const table = await db.get('SELECT * FROM tables WHERE id = ?', tableId);
+
+      if (!table) {
+        return { error: 'Table not found', status: 404 };
+      }
+
+      if (table.status === 'OCCUPIED') {
+        return { error: 'Table already occupied', status: 409 };
+      }
+
+      if (table.status === 'MAINTENANCE') {
+        return { error: 'Table under maintenance', status: 409 };
+      }
+
+      const startTime = now();
+
+      const sessionResult = await db.run(`
+        INSERT INTO sessions (
+          table_id, start_time, is_friendly, customer_name, customer_phone,
+          notes, last_resume_time, discount_percent, payment_method
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, tableId, startTime, is_friendly ? 1 : 0, customer_name, normalizedPhone,
+        notes, startTime, discount_percent, payment_method);
+
+      await db.run('UPDATE tables SET status = "OCCUPIED", light_on = 1, updated_at = ? WHERE id = ?', startTime, tableId);
+
+      const session = await db.get('SELECT * FROM sessions WHERE id = ?', sessionResult.lastID);
+      const updatedTable = await db.get('SELECT * FROM tables WHERE id = ?', tableId);
+      return { session, table: updatedTable };
     });
-    
+
+    if (result.error) {
+      return res.status(result.status).json({ error: result.error });
+    }
+
+    await controlTableLight(tableId, true);
+    broadcast('session:start', { session: result.session, table: result.table });
+
+    res.json({
+      success: true,
+      session: result.session,
+      table: result.table,
+      message: `Session started on Table ${tableId}`
+    });
+
   } catch (error) {
     console.error('❌ Error starting session:', error);
     res.status(500).json({ error: 'Failed to start session' });
@@ -821,82 +828,89 @@ app.post('/api/table/:id/stop', async (req, res) => {
   try {
     const tableId = parseInt(req.params.id);
     const { payment_method = 'CASH', discount_percent = 0 } = req.body;
-    
-    const db = await getDB();
-    const table = await db.get('SELECT * FROM tables WHERE id = ?', tableId);
-    const session = await db.get(`
-      SELECT * FROM sessions 
-      WHERE table_id = ? AND end_time IS NULL 
-      ORDER BY id DESC LIMIT 1
-    `, tableId);
-    
-    if (!table || !session) {
-      return res.status(404).json({ error: 'Table or active session not found' });
-    }
-    
-    const endTime = now();
-    const additionalMs = session.last_resume_time ? (endTime - session.last_resume_time) : 0;
-    const totalDurationMs = (session.duration_ms || 0) + additionalMs;
-    const billedMinutes = Math.max(0, ceilToMinute(totalDurationMs));
-    const perMinuteAmount = Math.round(billedMinutes * getRatePerMinute(table));
-    const baseAmount = session.is_friendly ? 0 : Math.max(table.minimum_charge || 0, perMinuteAmount);
-    const discountAmount = session.is_friendly ? 0 : Math.round(baseAmount * (discount_percent / 100));
-    const finalAmount = session.is_friendly ? 0 : (baseAmount - discountAmount);
-    const paymentStatus = session.is_friendly || finalAmount === 0 ? 'PAID' : 'PENDING';
-    
-    // Update session
-    await db.run(`
-      UPDATE sessions SET 
-        end_time = ?,
-        duration_ms = ?,
-        billed_minutes = ?,
-        amount = ?,
-        payment_method = ?,
-        discount_percent = ?,
-        payment_status = ?
-      WHERE id = ?
-    `, endTime, totalDurationMs, billedMinutes, finalAmount, payment_method, discount_percent, paymentStatus, session.id);
-    
-    // Update table
-    await db.run('UPDATE tables SET status = "AVAILABLE", light_on = 0 WHERE id = ?', tableId);
-    
-    const today = new Date().toISOString().slice(0, 10);
-    if (session.customer_name && !session.is_friendly) {
-      await upsertDailyPlayer(db, {
-        name: session.customer_name,
-        phone: session.customer_phone,
-        amount: finalAmount,
-        date: today
-      });
-    }
 
-    if (!session.is_friendly && finalAmount > 0) {
-      await applyEarningsToSummary(db, { ...session, amount: finalAmount, payment_method, is_friendly: session.is_friendly }, table);
-    }
+    const result = await withTransaction(async (db) => {
+      const table = await db.get('SELECT * FROM tables WHERE id = ?', tableId);
+      const session = await db.get(`
+        SELECT * FROM sessions
+        WHERE table_id = ? AND end_time IS NULL
+        ORDER BY id DESC LIMIT 1
+      `, tableId);
 
-    await incrementDailySessionCounts(db, today, session.is_friendly);
-    
-    const finalSession = await db.get('SELECT * FROM sessions WHERE id = ?', session.id);
-    const updatedTable = await db.get('SELECT * FROM tables WHERE id = ?', tableId);
-    
-    // Hardware integration
-    await controlTableLight(tableId, false);
-    
-    broadcast('session:stop', { session: finalSession, table: updatedTable });
-    
-    res.json({ 
-      success: true,
-      session: finalSession, 
-      table: updatedTable,
-      receipt: {
-        amount: finalAmount,
-        duration: formatDuration(totalDurationMs),
-        minutes: billedMinutes,
-        rate: `₹${getRatePerMinute(table)}/min (min ₹${table.minimum_charge || 0})`,
-        discount: discount_percent > 0 ? `${discount_percent}%` : null
+      if (!table || !session) {
+        return { error: 'Table or active session not found', status: 404 };
       }
+
+      const endTime = now();
+      const additionalMs = session.last_resume_time ? (endTime - session.last_resume_time) : 0;
+      const totalDurationMs = (session.duration_ms || 0) + additionalMs;
+      const billedMinutes = Math.max(0, ceilToMinute(totalDurationMs));
+      const perMinuteAmount = Math.round(billedMinutes * getRatePerMinute(table));
+      const baseAmount = session.is_friendly ? 0 : Math.max(table.minimum_charge || 0, perMinuteAmount);
+      const discountAmount = session.is_friendly ? 0 : Math.round(baseAmount * (discount_percent / 100));
+      const finalAmount = session.is_friendly ? 0 : (baseAmount - discountAmount);
+      const paymentStatus = session.is_friendly || finalAmount === 0 ? 'PAID' : 'PENDING';
+
+      await db.run(`
+        UPDATE sessions SET
+          end_time = ?,
+          duration_ms = ?,
+          billed_minutes = ?,
+          amount = ?,
+          payment_method = ?,
+          discount_percent = ?,
+          payment_status = ?
+        WHERE id = ?
+      `, endTime, totalDurationMs, billedMinutes, finalAmount, payment_method, discount_percent, paymentStatus, session.id);
+
+      await db.run('UPDATE tables SET status = "AVAILABLE", light_on = 0, updated_at = ? WHERE id = ?', endTime, tableId);
+
+      const today = new Date().toISOString().slice(0, 10);
+      if (session.customer_name && !session.is_friendly) {
+        await upsertDailyPlayer(db, {
+          name: session.customer_name,
+          phone: session.customer_phone,
+          amount: finalAmount,
+          date: today
+        });
+      }
+
+      if (!session.is_friendly && finalAmount > 0) {
+        await applyEarningsToSummary(db, { ...session, amount: finalAmount, payment_method, is_friendly: session.is_friendly }, table);
+      }
+
+      await incrementDailySessionCounts(db, today, session.is_friendly);
+
+      const finalSession = await db.get('SELECT * FROM sessions WHERE id = ?', session.id);
+      const updatedTable = await db.get('SELECT * FROM tables WHERE id = ?', tableId);
+
+      return {
+        finalSession,
+        updatedTable,
+        receipt: {
+          amount: finalAmount,
+          duration: formatDuration(totalDurationMs),
+          minutes: billedMinutes,
+          rate: `₹${getRatePerMinute(table)}/min (min ₹${table.minimum_charge || 0})`,
+          discount: discount_percent > 0 ? `${discount_percent}%` : null
+        }
+      };
     });
-    
+
+    if (result.error) {
+      return res.status(result.status).json({ error: result.error });
+    }
+
+    await controlTableLight(tableId, false);
+    broadcast('session:stop', { session: result.finalSession, table: result.updatedTable });
+
+    res.json({
+      success: true,
+      session: result.finalSession,
+      table: result.updatedTable,
+      receipt: result.receipt
+    });
+
   } catch (error) {
     console.error('❌ Error stopping session:', error);
     res.status(500).json({ error: 'Failed to stop session' });
@@ -1005,19 +1019,15 @@ app.get('/api/summary/today', async (req, res) => {
 
 app.get('/api/sessions', async (req, res) => {
   try {
-    const { date, limit = 50, offset = 0, customer_phone } = req.query;
+    const { limit = 50, offset = 0, customer_phone } = req.query;
+    const date = parseReportDate(req.query.date) || todayDateString();
+    const { startTime, endTime } = getDayBounds(date);
     const db = await getDB();
-    
+
     let query = 'SELECT s.*, t.type as table_type, t.name as table_name FROM sessions s JOIN tables t ON s.table_id = t.id';
     let params = [];
-    let conditions = [];
-    
-    if (date) {
-      const startTime = new Date(date + 'T00:00:00Z').getTime();
-      const endTime = startTime + 24 * 60 * 60 * 1000;
-      conditions.push('s.start_time >= ? AND s.start_time < ?');
-      params.push(startTime, endTime);
-    }
+    let conditions = ['s.start_time >= ? AND s.start_time < ?'];
+    params.push(startTime, endTime);
     
     if (customer_phone) {
       conditions.push('s.customer_phone = ?');

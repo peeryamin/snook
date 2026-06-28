@@ -82,6 +82,9 @@ class App {
     this.suggestions = [];
     this.earningsUnlocked = sessionStorage.getItem('earnings_unlocked') === 'true';
     this.pendingPasswordAction = null;
+    this.loadDataGeneration = 0;
+    this.loadDataTimer = null;
+    this.loadDataInFlight = null;
   }
 
   async init() {
@@ -209,13 +212,49 @@ class App {
     document.getElementById('view-earnings-btn').textContent = "View Today's Earnings";
   }
 
+  todayDateString() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  clearAllTimers() {
+    for (const timer of this.timers.values()) clearInterval(timer);
+    this.timers.clear();
+  }
+
+  scheduleLoadData(delay = 250) {
+    clearTimeout(this.loadDataTimer);
+    this.loadDataTimer = setTimeout(() => {
+      this.loadDataTimer = null;
+      this.loadData();
+    }, delay);
+  }
+
+  patchTableFromApi(table, activeSession = null) {
+    const idx = this.tables.findIndex((t) => t.id === table.id);
+    if (idx === -1) return;
+    this.tables[idx] = {
+      ...this.tables[idx],
+      ...table,
+      active_session: activeSession !== undefined ? activeSession : this.tables[idx].active_session
+    };
+  }
+
   async loadData() {
-    try {
+    const generation = ++this.loadDataGeneration;
+
+    if (this.loadDataInFlight) {
+      try { await this.loadDataInFlight; } catch (_) { /* ignore */ }
+      if (generation !== this.loadDataGeneration) return;
+    }
+
+    const request = (async () => {
       const headers = this.auth.getAuthHeaders();
+      const today = this.todayDateString();
       const [tablesRes, summaryRes, sessionsRes, playersRes] = await Promise.all([
         fetch('/api/tables', { headers }),
         fetch('/api/summary/today', { headers }),
-        fetch('/api/sessions?limit=100', { headers }),
+        fetch(`/api/sessions?date=${today}&limit=100`, { headers }),
         fetch('/api/players/today', { headers })
       ]);
 
@@ -223,6 +262,8 @@ class App {
         this.auth.handleAuthError();
         return;
       }
+
+      if (generation !== this.loadDataGeneration) return;
 
       this.tables = await tablesRes.json();
       if (!Array.isArray(this.tables)) this.tables = [];
@@ -238,8 +279,17 @@ class App {
       this.renderPending();
       this.renderPlayers();
       this.updateStats();
+    })();
+
+    this.loadDataInFlight = request;
+    try {
+      await request;
     } catch (_) {
-      this.toast('Failed to load data', 'error');
+      if (generation === this.loadDataGeneration) {
+        this.toast('Failed to load data', 'error');
+      }
+    } finally {
+      if (this.loadDataInFlight === request) this.loadDataInFlight = null;
     }
   }
 
@@ -250,7 +300,7 @@ class App {
     this.eventSource.addEventListener('connected', () => this.setOnline(true));
     this.eventSource.onerror = () => this.setOnline(false);
     ['session:start', 'session:stop', 'session:pause', 'session:resume', 'session:paid', 'table:update'].forEach((evt) => {
-      this.eventSource.addEventListener(evt, () => this.loadData());
+      this.eventSource.addEventListener(evt, () => this.scheduleLoadData());
     });
   }
 
@@ -304,6 +354,7 @@ class App {
   renderTables() {
     const grid = document.getElementById('tables-grid');
     if (!grid) return;
+    this.clearAllTimers();
     grid.innerHTML = '';
     for (const table of [...this.tables].sort((a, b) => a.id - b.id)) {
       grid.appendChild(this.createTableCard(table));
@@ -357,10 +408,10 @@ class App {
 
   startTimer(tableId, session) {
     if (this.timers.has(tableId)) clearInterval(this.timers.get(tableId));
-    const baseMs = Number(session.duration_ms || 0);
+    const sessionSnapshot = { ...session };
     const tick = () => {
-      const activeMs = session.last_resume_time ? Date.now() - session.last_resume_time : 0;
-      const elapsed = Math.max(0, baseMs + activeMs);
+      const activeMs = sessionSnapshot.last_resume_time ? Date.now() - sessionSnapshot.last_resume_time : 0;
+      const elapsed = Math.max(0, Number(sessionSnapshot.duration_ms || 0) + activeMs);
       const el = document.querySelector(`.session-timer[data-table-id="${tableId}"]`);
       if (!el) return;
       const m = Math.floor(elapsed / 60000);
@@ -482,6 +533,11 @@ class App {
     if (!res.ok) return this.toast(data.error || 'Failed to start session', 'error');
     document.getElementById('start-session-modal').classList.remove('show');
     this.toast('Session started', 'success');
+    if (data.table && data.session) {
+      this.patchTableFromApi(data.table, data.session);
+      this.renderTables();
+    }
+    clearTimeout(this.loadDataTimer);
     await this.loadData();
   }
 
@@ -519,6 +575,11 @@ class App {
     if (!res.ok) return this.toast(data.error || 'Failed to stop session', 'error');
     document.getElementById('stop-session-modal').classList.remove('show');
     this.toast(`Bill saved: Rs.${data.receipt?.amount || 0}. Mark as paid when money is received.`, 'success');
+    if (data.table) {
+      this.patchTableFromApi(data.table, null);
+      this.renderTables();
+    }
+    clearTimeout(this.loadDataTimer);
     await this.loadData();
   }
 

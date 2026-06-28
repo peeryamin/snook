@@ -7,6 +7,7 @@ import url from 'url';
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const DB_PATH = process.env.DB_PATH || (process.env.VERCEL ? '/tmp/parlor.db' : path.join(__dirname, 'parlor.db'));
 const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
+const USE_TURSO = Boolean(process.env.TURSO_DATABASE_URL);
 
 const BLACK_RACKS_TABLES = [
   { id: 1, name: 'Table 1', type: 'ENGLISH', hourly_rate: 300, minimum_charge: 100 },
@@ -15,17 +16,69 @@ const BLACK_RACKS_TABLES = [
 
 let dbInstance = null;
 
+function createTursoAdapter(client) {
+  return {
+    async get(sql, ...params) {
+      const result = await client.execute({ sql, args: params });
+      return result.rows[0] ?? undefined;
+    },
+    async all(sql, ...params) {
+      const result = await client.execute({ sql, args: params });
+      return [...result.rows];
+    },
+    async run(sql, ...params) {
+      const result = await client.execute({ sql, args: params });
+      return {
+        lastID: Number(result.lastInsertRowid ?? 0),
+        changes: result.rowsAffected ?? 0
+      };
+    },
+    async exec(sql) {
+      await client.executeMultiple(sql);
+    },
+    async close() {
+      client.close();
+    }
+  };
+}
+
 export async function getDB() {
   if (!dbInstance) {
-    dbInstance = await open({ 
-      filename: DB_PATH, 
-      driver: sqlite3.Database,
-      mode: sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE
-    });
-    await dbInstance.exec('PRAGMA foreign_keys = ON;');
-    await dbInstance.exec('PRAGMA journal_mode = WAL;');
+    if (USE_TURSO) {
+      const { createClient } = await import('@libsql/client');
+      const client = createClient({
+        url: process.env.TURSO_DATABASE_URL,
+        authToken: process.env.TURSO_AUTH_TOKEN
+      });
+      dbInstance = createTursoAdapter(client);
+      console.log('📡 Using Turso database (persistent)');
+    } else {
+      if (process.env.VERCEL) {
+        console.warn('⚠️ Vercel without TURSO_DATABASE_URL — each server instance has its own /tmp DB. Set up Turso for reliable multi-table sessions.');
+      }
+      dbInstance = await open({
+        filename: DB_PATH,
+        driver: sqlite3.Database,
+        mode: sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE
+      });
+      await dbInstance.exec('PRAGMA foreign_keys = ON;');
+      await dbInstance.exec('PRAGMA journal_mode = WAL;');
+    }
   }
   return dbInstance;
+}
+
+export async function withTransaction(fn) {
+  const db = await getDB();
+  await db.run('BEGIN IMMEDIATE');
+  try {
+    const result = await fn(db);
+    await db.run('COMMIT');
+    return result;
+  } catch (error) {
+    await db.run('ROLLBACK');
+    throw error;
+  }
 }
 
 export async function closeDB() {
@@ -63,15 +116,13 @@ export async function migrate() {
 }
 
 async function seedBlackRacksTables(db) {
-  const stmt = await db.prepare(`
-    INSERT INTO tables (id, name, type, hourly_rate, minimum_charge, status, light_on)
-    VALUES (?, ?, ?, ?, ?, 'AVAILABLE', 0)
-  `);
-
   for (const table of BLACK_RACKS_TABLES) {
-    await stmt.run(table.id, table.name, table.type, table.hourly_rate, table.minimum_charge);
+    await db.run(
+      `INSERT INTO tables (id, name, type, hourly_rate, minimum_charge, status, light_on)
+       VALUES (?, ?, ?, ?, ?, 'AVAILABLE', 0)`,
+      table.id, table.name, table.type, table.hourly_rate, table.minimum_charge
+    );
   }
-  await stmt.finalize();
 
   await db.run(
     `INSERT OR REPLACE INTO settings (key, value, description) VALUES (?, ?, ?)`,
@@ -287,9 +338,13 @@ async function runAdditionalMigrations(db) {
 }
 
 export async function backupDatabase() {
+  if (USE_TURSO) {
+    throw new Error('Database backup is not supported with Turso. Use Turso dashboard backups.');
+  }
+
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupPath = path.join(__dirname, `backup-${timestamp}.db`);
-  
+
   try {
     fs.copyFileSync(DB_PATH, backupPath);
     console.log(`✅ Database backed up to: ${backupPath}`);
