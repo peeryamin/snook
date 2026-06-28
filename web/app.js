@@ -115,6 +115,12 @@ class App {
       document.getElementById('user-dropdown')?.classList.toggle('show');
     });
 
+    document.getElementById('export-csv-btn')?.addEventListener('click', () => this.showExportCsvModal());
+    document.getElementById('confirm-export-csv')?.addEventListener('click', () => this.downloadSessionsExport());
+    document.querySelectorAll('input[name="export-range"]').forEach((radio) => {
+      radio.addEventListener('change', () => this.toggleExportDateInput());
+    });
+
     document.getElementById('earnings-password')?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this.unlockEarnings();
     });
@@ -634,6 +640,83 @@ class App {
     document.getElementById('customer-suggestions').innerHTML = '';
     document.getElementById('customer-suggestions').style.display = 'none';
     this.suggestions = [];
+  }
+
+  showExportCsvModal() {
+    document.getElementById('user-dropdown')?.classList.remove('show');
+    const today = new Date().toISOString().slice(0, 10);
+    const todayLabel = document.getElementById('export-today-label');
+    const dateInput = document.getElementById('export-date');
+    if (todayLabel) {
+      todayLabel.textContent = new Date().toLocaleDateString('en-IN', {
+        weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'
+      });
+    }
+    if (dateInput) {
+      dateInput.value = today;
+      dateInput.max = today;
+    }
+    document.querySelector('input[name="export-range"][value="today"]').checked = true;
+    this.toggleExportDateInput();
+    document.getElementById('export-csv-modal').classList.add('show');
+  }
+
+  toggleExportDateInput() {
+    const isCustom = document.querySelector('input[name="export-range"]:checked')?.value === 'custom';
+    const group = document.getElementById('export-date-group');
+    if (group) group.style.display = isCustom ? 'block' : 'none';
+  }
+
+  async downloadSessionsExport() {
+    const range = document.querySelector('input[name="export-range"]:checked')?.value || 'today';
+    const format = document.querySelector('input[name="export-format"]:checked')?.value || 'xlsx';
+    let date = null;
+    if (range === 'custom') {
+      date = document.getElementById('export-date')?.value;
+      if (!date) return this.toast('Please pick a date', 'error');
+    }
+
+    const btn = document.getElementById('confirm-export-csv');
+    const defaultLabel = 'Download';
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Downloading...';
+    }
+
+    try {
+      const query = date ? `?date=${encodeURIComponent(date)}` : '';
+      const endpoint = format === 'csv' ? '/api/reports/daily.csv' : '/api/reports/daily.xlsx';
+      const res = await fetch(`${endpoint}${query}`, {
+        headers: { Authorization: `Bearer ${this.auth.token}` }
+      });
+      if (res.status === 401) return this.auth.handleAuthError();
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return this.toast(data.error || 'Download failed', 'error');
+      }
+
+      const blob = await res.blob();
+      const disposition = res.headers.get('Content-Disposition') || '';
+      const match = disposition.match(/filename="([^"]+)"/);
+      const ext = format === 'csv' ? 'csv' : 'xlsx';
+      const filename = match?.[1] || `sessions-${date || new Date().toISOString().slice(0, 10)}.${ext}`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+
+      document.getElementById('export-csv-modal').classList.remove('show');
+      this.toast(`Sessions ${format.toUpperCase()} downloaded`, 'success');
+    } catch {
+      this.toast('Download failed', 'error');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = defaultLabel;
+      }
+    }
   }
 
   toast(message, type = 'info') {

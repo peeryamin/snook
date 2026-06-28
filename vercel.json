@@ -2,7 +2,8 @@
   "version": 2,
   "functions": {
     "api/index.js": {
-      "maxDuration": 800
+      "maxDuration": 800,
+      "includeFiles": "server/**"
     }
   },
   "builds": [

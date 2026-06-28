@@ -180,6 +180,73 @@ const getRatePerMinute = (table) => table.hourly_rate / 60;
 
 const getTableDisplayName = (table) => table.name || `Table ${table.id}`;
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function todayDateString() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function parseReportDate(input) {
+  const date = (input || todayDateString()).trim();
+  if (!DATE_RE.test(date)) return null;
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return date;
+}
+
+function getDayBounds(dateStr) {
+  const startTime = new Date(`${dateStr}T00:00:00`).getTime();
+  return { startTime, endTime: startTime + 86400000 };
+}
+
+function csvCell(value) {
+  if (value == null) return '';
+  const str = String(value);
+  return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+function csvRow(values) {
+  return `${values.map(csvCell).join(',')}\n`;
+}
+
+const SESSION_REPORT_HEADERS = [
+  'Session ID', 'Table', 'Table Type', 'Player Name', 'Phone',
+  'Start Time', 'End Time', 'Duration (min)', 'Amount (Rs)', 'Payment Method',
+  'Payment Status', 'Friendly Game', 'Discount %', 'Break Count', 'Notes'
+];
+
+function mapSessionToReportRow(session) {
+  return [
+    session.id,
+    session.table_name || `Table ${session.table_id}`,
+    session.table_type,
+    session.customer_name || '',
+    session.customer_phone || '',
+    new Date(session.start_time).toLocaleString('en-IN'),
+    session.end_time ? new Date(session.end_time).toLocaleString('en-IN') : 'Active',
+    session.billed_minutes || 0,
+    session.amount || 0,
+    session.payment_method || 'CASH',
+    session.payment_status || 'PENDING',
+    session.is_friendly ? 'Yes' : 'No',
+    session.discount_percent || 0,
+    session.break_count || 0,
+    session.notes || ''
+  ];
+}
+
+async function fetchSessionsForDate(date) {
+  const { startTime, endTime } = getDayBounds(date);
+  const db = await getDB();
+  return db.all(`
+    SELECT s.*, t.type as table_type, t.name as table_name
+    FROM sessions s
+    JOIN tables t ON s.table_id = t.id
+    WHERE s.start_time >= ? AND s.start_time < ?
+    ORDER BY s.start_time
+  `, startTime, endTime);
+}
+
 const calculateBillAmount = (table, minutes, { isFriendly = false, discountPercent = 0 } = {}) => {
   if (isFriendly) return 0;
   const perMinuteAmount = Math.round(minutes * getRatePerMinute(table));
@@ -1487,60 +1554,54 @@ app.get('/api/customers/:id/analytics', authenticateToken, async (req, res) => {
   }
 });
 
-// CSV Export
-app.get('/api/reports/daily.csv', async (req, res) => {
+// Session exports — admin-only; ?date=YYYY-MM-DD (defaults to today)
+app.get('/api/reports/daily.csv', requireAdmin, async (req, res) => {
   try {
-    const date = req.query.date || new Date().toISOString().slice(0, 10);
-    const startTime = new Date(date + 'T00:00:00Z').getTime();
-    const endTime = startTime + 24 * 60 * 60 * 1000;
+    const date = parseReportDate(req.query.date);
+    if (!date) {
+      return res.status(400).json({ error: 'Invalid date. Use YYYY-MM-DD.' });
+    }
 
-    const db = await getDB();
-    const sessions = await db.all(`
-      SELECT s.*, t.type as table_type
-      FROM sessions s
-      JOIN tables t ON s.table_id = t.id
-      WHERE s.start_time >= ? AND s.start_time < ?
-      ORDER BY s.table_id, s.start_time
-    `, startTime, endTime);
+    const sessions = await fetchSessionsForDate(date);
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="daily-report-${date}.csv"`);
+    res.setHeader('Content-Disposition', `attachment; filename="sessions-${date}.csv"`);
+    res.write('\uFEFF'); // UTF-8 BOM so Excel opens CSV correctly
+    res.write(csvRow(SESSION_REPORT_HEADERS));
 
-    // CSV Header
-    const headers = [
-      'Session ID', 'Table', 'Table Type', 'Customer Name', 'Customer Phone',
-      'Start Time', 'End Time', 'Duration (min)', 'Amount', 'Payment Method',
-      'Friendly Game', 'Discount %', 'Break Count', 'Notes'
-    ].join(',');
-
-    res.write(headers + '\n');
-
-    // CSV Data
     for (const session of sessions) {
-      const row = [
-        session.id,
-        session.table_id,
-        session.table_type,
-        session.customer_name || '',
-        session.customer_phone || '',
-        new Date(session.start_time).toLocaleString(),
-        session.end_time ? new Date(session.end_time).toLocaleString() : 'Active',
-        session.billed_minutes || 0,
-        session.amount || 0,
-        session.payment_method || 'CASH',
-        session.is_friendly ? 'Yes' : 'No',
-        session.discount_percent || 0,
-        session.break_count || 0,
-        (session.notes || '').replace(/,/g, ';')
-      ].join(',');
-
-      res.write(row + '\n');
+      res.write(csvRow(mapSessionToReportRow(session)));
     }
 
     res.end();
-
   } catch (error) {
     console.error('❌ Error generating CSV report:', error);
+    res.status(500).json({ error: 'Failed to generate report' });
+  }
+});
+
+app.get('/api/reports/daily.xlsx', requireAdmin, async (req, res) => {
+  try {
+    const date = parseReportDate(req.query.date);
+    if (!date) {
+      return res.status(400).json({ error: 'Invalid date. Use YYYY-MM-DD.' });
+    }
+
+    const sessions = await fetchSessionsForDate(date);
+    const { default: XLSX } = await import('xlsx');
+
+    const rows = [SESSION_REPORT_HEADERS, ...sessions.map(mapSessionToReportRow)];
+    const sheet = XLSX.utils.aoa_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Sessions');
+
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="sessions-${date}.xlsx"`);
+    res.send(buffer);
+  } catch (error) {
+    console.error('❌ Error generating Excel report:', error);
     res.status(500).json({ error: 'Failed to generate report' });
   }
 });
