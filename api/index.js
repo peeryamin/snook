@@ -8,9 +8,7 @@ async function getApp() {
   return appHandler;
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   const app = await getApp();
   return app(req, res);
-};
-
-module.exports.default = module.exports;
+}
