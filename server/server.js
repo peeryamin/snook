@@ -130,7 +130,7 @@ app.get('/api/events', (req, res) => {
       clearInterval(heartbeat);
       try { res.end(); } catch (_) {}
     }
-  }, 250000);
+  }, 780000); // ~13 min, matches Vercel maxDuration: 800
 
   req.on('close', () => {
     clearInterval(heartbeat);
