@@ -21,6 +21,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'black-racks-dev-secret-change-in-p
 const app = express();
 const isMainModule = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
+app.set('trust proxy', 1);
+
 // Security middleware
 app.use(helmet({
   contentSecurityPolicy: false, // Allow inline scripts for SSE
@@ -101,30 +103,38 @@ const clients = new Set();
 
 app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.flushHeaders();
-  
-  // Send initial connection confirmation
-  res.write('event: connected\ndata: {"message":"Connected to real-time updates"}\n\n');
-  res.write('retry: 3000\n\n');
 
   const clientId = Date.now().toString();
   const client = { id: clientId, res, lastPing: Date.now() };
   clients.add(client);
 
-  // Heartbeat to keep connection alive
+  res.write('event: connected\ndata: {"message":"Connected to real-time updates"}\n\n');
+  res.write('retry: 3000\n\n');
+
   const heartbeat = setInterval(() => {
     if (clients.has(client)) {
-      res.write('event: heartbeat\ndata: {"timestamp":' + Date.now() + '}\n\n');
+      res.write(': heartbeat\n\n');
       client.lastPing = Date.now();
     }
-  }, 30000);
+  }, 25000);
+
+  const timeout = setTimeout(() => {
+    if (clients.has(client)) {
+      clients.delete(client);
+      clearInterval(heartbeat);
+      try { res.end(); } catch (_) {}
+    }
+  }, 250000);
 
   req.on('close', () => {
     clearInterval(heartbeat);
+    clearTimeout(timeout);
     clients.delete(client);
     console.log(`🔌 Client ${clientId} disconnected. Active clients: ${clients.size}`);
   });
