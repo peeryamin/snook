@@ -1,6 +1,6 @@
 # Fly.io configuration for Black Racks Snooker Management
 app = "black-racks-snooker"
-primary_region = "ord"
+primary_region = "bom"
 
 [build]
   dockerfile = "Dockerfile"
