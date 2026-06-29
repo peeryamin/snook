@@ -223,6 +223,47 @@ class App {
     this.timers.clear();
   }
 
+  // Tracks which rows are already on screen, so newly inserted rows can get a
+  // subtle "enter" animation. Keyed per-block.
+  _markNewRows(tbodyId, currentKeys) {
+    if (!this._seenRowKeys) this._seenRowKeys = {};
+    const seen = this._seenRowKeys[tbodyId] || new Set();
+    const next = new Set(currentKeys);
+    requestAnimationFrame(() => {
+      const tbody = document.getElementById(tbodyId);
+      if (!tbody) return;
+      tbody.querySelectorAll('tr').forEach((tr) => {
+        const key = tr.dataset.rowKey;
+        if (key && !seen.has(key)) {
+          tr.classList.add('row-enter');
+          // Remove the class after the animation so subsequent renders don't replay it
+          setTimeout(() => tr.classList.remove('row-enter'), 520);
+        }
+      });
+    });
+    this._seenRowKeys[tbodyId] = next;
+  }
+
+  // Smoothly animates a numeric counter from its current displayed value to the new one.
+  _animateCount(el, targetValue, opts = {}) {
+    if (!el) return;
+    const fmt = opts.format || ((v) => String(Math.round(v)));
+    const prefix = opts.prefix || '';
+    const start = Number((el.textContent || '0').replace(/[^\d.-]/g, '')) || 0;
+    const end = Number(targetValue) || 0;
+    if (start === end) { el.textContent = prefix + fmt(end); return; }
+    const duration = Math.min(700, 250 + Math.abs(end - start) * 4);
+    const t0 = performance.now();
+    const step = (t) => {
+      const p = Math.min(1, (t - t0) / duration);
+      const eased = 1 - Math.pow(1 - p, 3); // ease-out cubic
+      const v = start + (end - start) * eased;
+      el.textContent = prefix + fmt(v);
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
   scheduleLoadData(delay = 250) {
     clearTimeout(this.loadDataTimer);
     this.loadDataTimer = setTimeout(() => {
@@ -325,22 +366,36 @@ class App {
       const data = JSON.parse(e.data);
       if (event === 'session:start' && data.table && data.session) {
         this.patchTableFromApi(data.table, data.session);
-        this.renderTables();
-        clearTimeout(this.loadDataTimer);
-        this.refreshAuxiliaryData();
+        this.upsertSessionRecord({ ...data.session, end_time: null, payment_status: data.session.payment_status || 'PENDING' });
+        this._rerenderTableCard(this.tables.find((t) => t.id === data.table.id));
+        this.renderActiveSessions();
         return;
       }
       if (event === 'session:stop' && data.table) {
         this.patchTableFromApi(data.table, null);
-        this.renderTables();
         if (data.session) this.upsertSessionRecord(data.session);
-        clearTimeout(this.loadDataTimer);
-        this.refreshAuxiliaryData();
+        this._rerenderTableCard(this.tables.find((t) => t.id === data.table.id));
+        this.renderSessions();
+        this.renderPending();
+        this.renderActiveSessions();
         return;
       }
       if ((event === 'session:pause' || event === 'session:resume') && data.table_id) {
-        clearTimeout(this.loadDataTimer);
-        this.refreshTableById(data.table_id);
+        // Patch the local active session's last_resume_time directly — no full grid rebuild.
+        const table = this.tables.find((t) => t.id === data.table_id);
+        if (table && table.active_session) {
+          const session = { ...table.active_session };
+          if (event === 'session:pause') {
+            const addedMs = session.last_resume_time ? Math.max(0, Date.now() - session.last_resume_time) : 0;
+            session.duration_ms = (session.duration_ms || 0) + addedMs;
+            session.last_resume_time = null;
+          } else if (!session.last_resume_time) {
+            session.last_resume_time = Date.now();
+          }
+          table.active_session = session;
+          this.upsertSessionRecord(session);
+          this._rerenderTableCard(table);
+        }
         return;
       }
       if (event === 'session:paid' && data.session) {
@@ -352,7 +407,7 @@ class App {
       }
       if (event === 'table:update' && data.id) {
         this.patchTableFromApi(data, data.status === 'OCCUPIED' ? data.active_session : null);
-        this.renderTables();
+        this._rerenderTableCard(this.tables.find((t) => t.id === data.id));
         return;
       }
     } catch (_) {
@@ -485,7 +540,9 @@ class App {
     const viewBtn = document.getElementById('view-earnings-btn');
 
     if (this.earningsUnlocked) {
-      earningsEl.textContent = `Rs.${(s.total_earnings || 0).toLocaleString('en-IN')}`;
+      this._animateCount(earningsEl, s.total_earnings || 0, {
+        prefix: 'Rs.', format: (v) => Math.round(v).toLocaleString('en-IN')
+      });
       breakdownEl.textContent =
         `Table 1: Rs.${(s.english_earnings || 0).toLocaleString('en-IN')} | Table 2: Rs.${(s.french_earnings || 0).toLocaleString('en-IN')}`;
       earningsEl.classList.remove('masked');
@@ -499,8 +556,8 @@ class App {
       viewBtn.textContent = "View Today's Earnings";
     }
 
-    document.getElementById('session-count').textContent = String(s.total_sessions || 0);
-    document.getElementById('player-count').textContent = String(this.players.length);
+    this._animateCount(document.getElementById('session-count'), s.total_sessions || 0);
+    this._animateCount(document.getElementById('player-count'), this.players.length);
   }
 
   getTableName(table) {
@@ -656,7 +713,7 @@ class App {
 
       const winnerOwes = winner.food > 0;
 
-      const renderRow = (entry, role) => `<tr class="pending-row pending-${entry.pos}" data-session-id="${s.id}" data-testid="pending-row-${s.id}-${entry.pos}">
+      const renderRow = (entry, role) => `<tr class="pending-row pending-${entry.pos}" data-row-key="p-${s.id}-${entry.pos}" data-session-id="${s.id}" data-testid="pending-row-${s.id}-${entry.pos}">
         <td>${tableName}</td>
         <td class="player-cell"><span class="player-name">${entry.name}</span> ${buildLabel(role, entry.food)}</td>
         <td class="bill-amount">Rs.${entry.total}</td>
@@ -672,6 +729,7 @@ class App {
       }
     }
     tbody.innerHTML = rows.join('');
+    this._markNewRows('pending-tbody', rows.map((html) => (html.match(/data-row-key="([^"]+)"/) || [])[1]).filter(Boolean));
   }
 
   renderSessions() {
@@ -694,7 +752,7 @@ class App {
       const foodP1 = s.food_charge_p1 != null ? `Rs.${s.food_charge_p1}` : (s.food_charge != null && s.loser === 'PLAYER_ONE' ? `Rs.${s.food_charge}` : 'Rs.0');
       const foodP2 = s.food_charge_p2 != null ? `Rs.${s.food_charge_p2}` : (s.food_charge != null && s.loser === 'PLAYER_TWO' ? `Rs.${s.food_charge}` : 'Rs.0');
       const totalAmount = s.amount != null ? `Rs.${s.amount}` : '-';
-      return `<tr>
+      return `<tr data-row-key="h-${s.id}">
         <td>${tableName}</td>
         <td>${players}</td>
         <td>${payer}</td>
@@ -709,6 +767,7 @@ class App {
         <td>${status}</td>
       </tr>`;
     }).join('');
+    this._markNewRows('history-tbody', completed.map((s) => `h-${s.id}`));
   }
 
   renderActiveSessions() {
@@ -730,7 +789,7 @@ class App {
       const duration = s.billed_minutes != null ? `${s.billed_minutes}m` : '-';
       const amount = s.amount != null ? `Rs.${s.amount}` : '-';
       const status = s.payment_status === 'PENDING' ? '<span class="badge-pending">Pending</span>' : '<span class="badge-active">Active</span>';
-      return `<tr>
+      return `<tr data-row-key="a-${s.id}">
         <td>${tableName}</td>
         <td>${players}</td>
         <td>${formatPhoneDisplay(s.customer_phone)}</td>
@@ -740,6 +799,7 @@ class App {
         <td>${status}</td>
       </tr>`;
     }).join('');
+    this._markNewRows('active-tbody', active.map((s) => `a-${s.id}`));
   }
 
   renderPlayers() {
@@ -1419,11 +1479,20 @@ class App {
 
   toast(message, type = 'info') {
     const container = document.getElementById('toast-container');
+    if (!container) return;
     const el = document.createElement('div');
     el.className = `toast toast-${type}`;
-    el.textContent = message;
+    const icons = { success: '✓', error: '!', info: 'i', warning: '⚠' };
+    el.innerHTML = `<span class="toast-icon" aria-hidden="true">${icons[type] || icons.info}</span><span class="toast-msg">${message}</span>`;
     container.appendChild(el);
-    setTimeout(() => el.remove(), 4000);
+    // Force a frame so the entrance transition runs
+    requestAnimationFrame(() => el.classList.add('toast-in'));
+    const hide = () => {
+      el.classList.add('toast-out');
+      setTimeout(() => el.remove(), 280);
+    };
+    el.addEventListener('click', hide);
+    setTimeout(hide, 3500);
   }
 }
 
