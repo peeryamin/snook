@@ -654,18 +654,21 @@ class App {
         return `<span class="role-chip ${cls}">${base}${suffix}</span>`;
       };
 
+      const winnerOwes = winner.food > 0;
+      const buttonLabel = winnerOwes ? 'Mark Both Paid' : 'Mark Paid';
+
       const renderRow = (entry, role) => `<tr class="pending-row pending-${entry.pos}" data-session-id="${s.id}" data-testid="pending-row-${s.id}-${entry.pos}">
         <td>${tableName}</td>
         <td class="player-cell"><span class="player-name">${entry.name}</span> ${buildLabel(role, entry.food)}</td>
         <td class="bill-amount">Rs.${entry.total}</td>
         <td>${method}</td>
-        <td><button class="btn btn-success btn-sm pending-pay-btn" data-testid="mark-paid-${s.id}-${entry.pos}" onclick="app.markPaid(${s.id})">Mark Both Paid</button></td>
+        <td><button class="btn btn-success btn-sm pending-pay-btn" data-testid="mark-paid-${s.id}-${entry.pos}" onclick="app.markPaid(${s.id})">${buttonLabel}</button></td>
       </tr>`;
 
       // Always show loser
       rows.push(renderRow(loser, 'loser'));
       // Show winner ONLY when they had food
-      if (winner.food > 0) {
+      if (winnerOwes) {
         rows.push(renderRow(winner, 'winner'));
       }
     }
