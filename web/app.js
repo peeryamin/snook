@@ -614,43 +614,60 @@ class App {
     }
     if (!tbody) return;
     if (!pending.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center">No pending payments</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5" class="text-center">No pending payments</td></tr>';
       return;
     }
 
-    // Render TWO rows per session — one per player — so each per-player bill is
-    // visible separately. Either row's "Mark as Paid" settles the whole session
-    // (they pay together; this is just split for visibility).
+    // Rules:
+    //  - Loser row is ALWAYS shown (they pay game time). Label: "Loser" or "Loser + Food".
+    //  - Winner row is shown ONLY if they ordered food (winner doesn't pay otherwise).
+    //    Label: "Winner + Food".
+    //  - "Mark Both Paid" on any row settles the whole session.
     const rows = [];
     for (const s of pending) {
       const tableName = s.table_name || this.getTableName(this.tables.find((t) => t.id === s.table_id));
       const gameAmount = Math.max(0, Number(s.amount || 0) - Number(s.food_charge_p1 || 0) - Number(s.food_charge_p2 || 0));
       const p1Name = s.player_one_name || 'Player One';
       const p2Name = s.player_two_name || 'Player Two';
-      const p1Items = s.food_items_p1 || '-';
-      const p2Items = s.food_items_p2 || '-';
       const p1Food = Number(s.food_charge_p1 || 0);
       const p2Food = Number(s.food_charge_p2 || 0);
-      const p1Total = (s.loser === 'PLAYER_ONE' ? gameAmount : 0) + p1Food;
-      const p2Total = (s.loser === 'PLAYER_TWO' ? gameAmount : 0) + p2Food;
+      const loserIsP1 = s.loser === 'PLAYER_ONE';
       const method = s.payment_method || 'CASH';
 
-      const renderRow = (playerName, role, items, total, posClass) => {
-        const loserBadge = role === 'loser'
-          ? '<span class="role-chip role-loser" title="Loser pays game time">Loser</span>'
-          : '<span class="role-chip role-winner">Winner</span>';
-        return `<tr class="pending-row pending-${posClass}" data-session-id="${s.id}" data-testid="pending-row-${s.id}-${posClass}">
-          <td>${tableName}</td>
-          <td>${playerName} ${loserBadge}</td>
-          <td>${items}</td>
-          <td>Rs.${total}</td>
-          <td>${method}</td>
-          <td><button class="btn btn-success btn-sm pending-pay-btn" data-testid="mark-paid-${s.id}-${posClass}" onclick="app.markPaid(${s.id})">Mark Both Paid</button></td>
-        </tr>`;
+      const loser = {
+        name: loserIsP1 ? p1Name : p2Name,
+        food: loserIsP1 ? p1Food : p2Food,
+        total: gameAmount + (loserIsP1 ? p1Food : p2Food),
+        pos: loserIsP1 ? 'p1' : 'p2'
+      };
+      const winner = {
+        name: loserIsP1 ? p2Name : p1Name,
+        food: loserIsP1 ? p2Food : p1Food,
+        total: loserIsP1 ? p2Food : p1Food,
+        pos: loserIsP1 ? 'p2' : 'p1'
       };
 
-      rows.push(renderRow(p1Name, s.loser === 'PLAYER_ONE' ? 'loser' : 'winner', p1Items, p1Total, 'p1'));
-      rows.push(renderRow(p2Name, s.loser === 'PLAYER_TWO' ? 'loser' : 'winner', p2Items, p2Total, 'p2'));
+      const buildLabel = (role, food) => {
+        const base = role === 'loser' ? 'Loser' : 'Winner';
+        const suffix = food > 0 ? ' + Food' : '';
+        const cls = role === 'loser' ? 'role-loser' : 'role-winner';
+        return `<span class="role-chip ${cls}">${base}${suffix}</span>`;
+      };
+
+      const renderRow = (entry, role) => `<tr class="pending-row pending-${entry.pos}" data-session-id="${s.id}" data-testid="pending-row-${s.id}-${entry.pos}">
+        <td>${tableName}</td>
+        <td class="player-cell"><span class="player-name">${entry.name}</span> ${buildLabel(role, entry.food)}</td>
+        <td class="bill-amount">Rs.${entry.total}</td>
+        <td>${method}</td>
+        <td><button class="btn btn-success btn-sm pending-pay-btn" data-testid="mark-paid-${s.id}-${entry.pos}" onclick="app.markPaid(${s.id})">Mark Both Paid</button></td>
+      </tr>`;
+
+      // Always show loser
+      rows.push(renderRow(loser, 'loser'));
+      // Show winner ONLY when they had food
+      if (winner.food > 0) {
+        rows.push(renderRow(winner, 'winner'));
+      }
     }
     tbody.innerHTML = rows.join('');
   }
@@ -863,20 +880,57 @@ class App {
     const gameP2 = loser === 'PLAYER_TWO' ? game : 0;
     const totalP1 = gameP1 + foodP1;
     const totalP2 = gameP2 + foodP2;
-    const renderBill = (name, role, gameAmt, foodAmt, items, testid) => `
-      <div class="bill-card ${role}" data-testid="${testid}">
-        <div class="bill-head"><span class="bill-name">${name}</span><span class="bill-role">${role === 'loser' ? 'Loser · pays game' : 'Winner'}</span></div>
-        <div class="bill-line"><span>Game time</span><span>Rs.${gameAmt}</span></div>
-        <div class="bill-line"><span>Food${items ? ` (${items})` : ''}</span><span>Rs.${foodAmt}</span></div>
-        <div class="bill-line bill-total"><span>Total</span><span>Rs.${gameAmt + foodAmt}</span></div>
-      </div>`;
+    const combined = totalP1 + totalP2;
+
+    const renderReceipt = (name, role, gameAmt, foodAmt, items, testid) => {
+      const isLoser = role === 'loser';
+      const tag = isLoser
+        ? (foodAmt > 0 ? 'Loser + Food' : 'Loser')
+        : (foodAmt > 0 ? 'Winner + Food' : 'Winner · No charge');
+      const tagCls = isLoser ? 'tag-loser' : 'tag-winner';
+      const lines = [];
+      if (gameAmt > 0) {
+        lines.push(`<div class="receipt-line"><span class="rl-label">Game time</span><span class="rl-value">Rs.${gameAmt}</span></div>`);
+      }
+      if (foodAmt > 0) {
+        lines.push(`<div class="receipt-line"><span class="rl-label">Food${items ? ` · <em>${items}</em>` : ''}</span><span class="rl-value">Rs.${foodAmt}</span></div>`);
+      }
+      if (!lines.length) {
+        lines.push(`<div class="receipt-empty">Nothing to pay</div>`);
+      }
+      const total = gameAmt + foodAmt;
+      return `
+        <div class="receipt-card ${isLoser ? 'is-loser' : 'is-winner'} ${total === 0 ? 'is-empty' : ''}" data-testid="${testid}">
+          <div class="receipt-head">
+            <div class="receipt-name">${name}</div>
+            <div class="receipt-tag ${tagCls}">${tag}</div>
+          </div>
+          <div class="receipt-perforation" aria-hidden="true"></div>
+          <div class="receipt-body">
+            ${lines.join('')}
+          </div>
+          <div class="receipt-total">
+            <span class="rt-label">To pay</span>
+            <span class="rt-amount">Rs.${total}</span>
+          </div>
+        </div>`;
+    };
+
     host.innerHTML = `
-      <div class="bills-title">Two separate bills</div>
-      <div class="bills-grid">
-        ${renderBill(ctx.p1, loser === 'PLAYER_ONE' ? 'loser' : 'winner', gameP1, foodP1, itemsP1, 'bill-p1')}
-        ${renderBill(ctx.p2, loser === 'PLAYER_TWO' ? 'loser' : 'winner', gameP2, foodP2, itemsP2, 'bill-p2')}
+      <div class="bills-block">
+        <div class="bills-heading">
+          <span class="bills-heading-bar"></span>
+          <span>Two separate bills</span>
+        </div>
+        <div class="receipts-grid">
+          ${renderReceipt(ctx.p1, loser === 'PLAYER_ONE' ? 'loser' : 'winner', gameP1, foodP1, itemsP1, 'bill-p1')}
+          ${renderReceipt(ctx.p2, loser === 'PLAYER_TWO' ? 'loser' : 'winner', gameP2, foodP2, itemsP2, 'bill-p2')}
+        </div>
+        <div class="bills-grand-card" data-testid="bills-grand-total">
+          <div class="bg-label">Combined session total</div>
+          <div class="bg-amount">Rs.${combined}</div>
+        </div>
       </div>
-      <div class="bills-grand" data-testid="bills-grand-total">Combined session total: <strong>Rs.${totalP1 + totalP2}</strong></div>
     `;
   }
 
