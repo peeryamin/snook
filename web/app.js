@@ -617,19 +617,42 @@ class App {
       tbody.innerHTML = '<tr><td colspan="6" class="text-center">No pending payments</td></tr>';
       return;
     }
-    tbody.innerHTML = pending.map((s) => {
+
+    // Render TWO rows per session — one per player — so each per-player bill is
+    // visible separately. Either row's "Mark as Paid" settles the whole session
+    // (they pay together; this is just split for visibility).
+    const rows = [];
+    for (const s of pending) {
       const tableName = s.table_name || this.getTableName(this.tables.find((t) => t.id === s.table_id));
-      const players = `${s.player_one_name || 'Player One'} vs ${s.player_two_name || 'Player Two'}`;
-      const payer = s.payer_name || (s.loser === 'PLAYER_ONE' ? s.player_one_name : s.player_two_name) || 'Unknown';
-      return `<tr>
-        <td>${tableName}</td>
-        <td>${players}</td>
-        <td>${payer}</td>
-        <td>Rs.${s.amount}</td>
-        <td>${s.payment_method || 'CASH'}</td>
-        <td><button class="btn btn-success btn-sm" onclick="app.markPaid(${s.id})">Mark as Paid</button></td>
-      </tr>`;
-    }).join('');
+      const gameAmount = Math.max(0, Number(s.amount || 0) - Number(s.food_charge_p1 || 0) - Number(s.food_charge_p2 || 0));
+      const p1Name = s.player_one_name || 'Player One';
+      const p2Name = s.player_two_name || 'Player Two';
+      const p1Items = s.food_items_p1 || '-';
+      const p2Items = s.food_items_p2 || '-';
+      const p1Food = Number(s.food_charge_p1 || 0);
+      const p2Food = Number(s.food_charge_p2 || 0);
+      const p1Total = (s.loser === 'PLAYER_ONE' ? gameAmount : 0) + p1Food;
+      const p2Total = (s.loser === 'PLAYER_TWO' ? gameAmount : 0) + p2Food;
+      const method = s.payment_method || 'CASH';
+
+      const renderRow = (playerName, role, items, total, posClass) => {
+        const loserBadge = role === 'loser'
+          ? '<span class="role-chip role-loser" title="Loser pays game time">Loser</span>'
+          : '<span class="role-chip role-winner">Winner</span>';
+        return `<tr class="pending-row pending-${posClass}" data-session-id="${s.id}" data-testid="pending-row-${s.id}-${posClass}">
+          <td>${tableName}</td>
+          <td>${playerName} ${loserBadge}</td>
+          <td>${items}</td>
+          <td>Rs.${total}</td>
+          <td>${method}</td>
+          <td><button class="btn btn-success btn-sm pending-pay-btn" data-testid="mark-paid-${s.id}-${posClass}" onclick="app.markPaid(${s.id})">Mark Both Paid</button></td>
+        </tr>`;
+      };
+
+      rows.push(renderRow(p1Name, s.loser === 'PLAYER_ONE' ? 'loser' : 'winner', p1Items, p1Total, 'p1'));
+      rows.push(renderRow(p2Name, s.loser === 'PLAYER_TWO' ? 'loser' : 'winner', p2Items, p2Total, 'p2'));
+    }
+    tbody.innerHTML = rows.join('');
   }
 
   renderSessions() {

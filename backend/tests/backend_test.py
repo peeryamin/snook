@@ -321,7 +321,7 @@ class TestReports:
         ctype = r.headers.get("content-type", "")
         assert "text/csv" in ctype or "csv" in ctype.lower()
         text = r.text
-        assert "Session ID" in text or "session_id" in text.lower()
+        assert "Table" in text and "Players" in text and "Player Who Paid" in text
 
     def test_reports_xlsx(self, auth_client):
         r = auth_client.get(f"{BASE_URL}/api/reports/daily.xlsx", timeout=30)

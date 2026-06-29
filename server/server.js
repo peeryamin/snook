@@ -238,43 +238,28 @@ function selectSessionsForExport(sessions, date) {
 }
 
 const SESSION_REPORT_HEADERS = [
-  'Session ID', 'Table', 'Table Type', 'Player One', 'Player Two', 'Loser', 'Payer',
-  'Phone', 'Start Time', 'End Time', 'Duration (min)', 'Base Amount (Rs)',
-  'Food P1 (Rs)', 'Food Items P1', 'Food P2 (Rs)', 'Food Items P2',
-  'Food Total (Rs)', 'Total Amount (Rs)', 'Payment Method',
-  'Payment Status', 'Friendly Game', 'Discount %', 'Break Count', 'Notes'
+  'Table', 'Players', 'Player Who Paid', 'Start', 'Duration (min)',
+  'Session (Rs)', 'Food P1 (Rs)', 'Food P2 (Rs)', 'Total (Rs)',
+  'Method', 'Status'
 ];
 
 function mapSessionToReportRow(session) {
   const foodP1 = Number(session.food_charge_p1 || 0);
   const foodP2 = Number(session.food_charge_p2 || 0);
-  const foodTotal = Number(session.food_charge || (foodP1 + foodP2)) || 0;
-  const baseAmount = Math.max(0, Number(session.amount || 0) - foodTotal);
+  const foodTotal = foodP1 + foodP2;
+  const sessionAmount = Math.max(0, Number(session.amount || 0) - foodTotal);
   return [
-    session.id,
     session.table_name || `Table ${session.table_id}`,
-    session.table_type,
-    session.player_one_name || '',
-    session.player_two_name || '',
-    session.loser || '',
+    `${session.player_one_name || ''} vs ${session.player_two_name || ''}`,
     session.payer_name || '',
-    session.customer_phone || '',
     session.start_time ? new Date(session.start_time).toLocaleString('en-IN') : '',
-    session.end_time ? new Date(session.end_time).toLocaleString('en-IN') : 'Active',
     session.billed_minutes || 0,
-    baseAmount,
+    sessionAmount,
     foodP1,
-    session.food_items_p1 || '',
     foodP2,
-    session.food_items_p2 || '',
-    foodTotal,
     session.amount || 0,
     session.payment_method || 'CASH',
-    session.payment_status || 'PENDING',
-    session.is_friendly ? 'Yes' : 'No',
-    session.discount_percent || 0,
-    session.break_count || 0,
-    session.notes || ''
+    session.payment_status || 'PENDING'
   ];
 }
 

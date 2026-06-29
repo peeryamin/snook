@@ -31,6 +31,24 @@ _client: httpx.AsyncClient | None = None
 
 
 def _start_node() -> subprocess.Popen:
+    # Kill any orphaned Node Express child from a previous uvicorn process that
+    # didn't clean up (this prevents stale code from sticking around on port 8002).
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", "node server.js"], capture_output=True, text=True
+        )
+        for line in (out.stdout or "").splitlines():
+            pid = line.strip()
+            if not pid:
+                continue
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except (ValueError, ProcessLookupError, PermissionError):
+                pass
+        time.sleep(0.5)
+    except Exception:
+        pass
+
     env = os.environ.copy()
     env["PORT"] = str(NODE_PORT)
     env["HOST"] = NODE_HOST
