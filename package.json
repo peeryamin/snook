@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "nodemon": "^3.0.2",
-    "playwright": "^1.44.0"
+    "playwright": "^1.44.0",
+    "vercel": "^54.18.2"
   }
 }
