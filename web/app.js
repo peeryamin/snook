@@ -961,7 +961,6 @@ class App {
 
   async downloadSessionsExport() {
     const range = document.querySelector('input[name="export-range"]:checked')?.value || 'today';
-    const format = document.querySelector('input[name="export-format"]:checked')?.value || 'xlsx';
     let date = null;
     if (range === 'custom') {
       date = document.getElementById('export-date')?.value;
@@ -977,8 +976,7 @@ class App {
 
     try {
       const query = date ? `?date=${encodeURIComponent(date)}` : '';
-      const endpoint = format === 'csv' ? '/api/reports/daily.csv' : '/api/reports/daily.xlsx';
-      const res = await fetch(`${endpoint}${query}`, {
+      const res = await fetch(`/api/reports/daily.xlsx${query}`, {
         headers: { Authorization: `Bearer ${this.auth.token}` }
       });
       if (res.status === 401) return this.auth.handleAuthError();
@@ -990,8 +988,7 @@ class App {
       const blob = await res.blob();
       const disposition = res.headers.get('Content-Disposition') || '';
       const match = disposition.match(/filename="([^"]+)"/);
-      const ext = format === 'csv' ? 'csv' : 'xlsx';
-      const filename = match?.[1] || `sessions-${date || new Date().toISOString().slice(0, 10)}.${ext}`;
+      const filename = match?.[1] || `history-${date || new Date().toISOString().slice(0, 10)}.xlsx`;
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -1000,7 +997,7 @@ class App {
       URL.revokeObjectURL(url);
 
       document.getElementById('export-csv-modal').classList.remove('show');
-      this.toast(`Sessions ${format.toUpperCase()} downloaded`, 'success');
+      this.toast('History Excel downloaded', 'success');
     } catch {
       this.toast('Download failed', 'error');
     } finally {

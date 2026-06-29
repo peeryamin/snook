@@ -214,28 +214,60 @@ function csvRow(values) {
   return `${values.map(csvCell).join(',')}\n`;
 }
 
+function getSessionDateValue(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().slice(0, 10);
+}
+
+function selectSessionsForExport(sessions, date) {
+  const targetDate = String(date || '').slice(0, 10);
+  const seen = new Set();
+
+  return (Array.isArray(sessions) ? sessions : []).filter((session) => {
+    if (!session || !session.end_time) return false;
+    const startDate = getSessionDateValue(session.start_time);
+    if (targetDate && startDate !== targetDate) return false;
+
+    const key = session.id ?? `${session.table_id || 'unknown'}-${session.start_time || 'unknown'}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 const SESSION_REPORT_HEADERS = [
-  'Session ID', 'Table', 'Table Type', 'Player Name', 'Phone',
-  'Start Time', 'End Time', 'Duration (min)', 'Amount (Rs)', 'Payment Method',
-  'Payment Status', 'Friendly Game', 'Discount %', 'Break Count', 'Notes'
+  'Session ID', 'Table', 'Table Type', 'Player One', 'Player Two', 'Loser', 'Payer',
+  'Phone', 'Start Time', 'End Time', 'Duration (min)', 'Base Amount (Rs)',
+  'Food Charge (Rs)', 'Tip (Rs)', 'Total Amount (Rs)', 'Payment Method',
+  'Payment Status', 'Friendly Game', 'Discount %', 'Break Count', 'Food Items', 'Notes'
 ];
 
 function mapSessionToReportRow(session) {
+  const baseAmount = Math.max(0, Number(session.amount || 0) - Number(session.food_charge || 0) - Number(session.tip || 0));
   return [
     session.id,
     session.table_name || `Table ${session.table_id}`,
     session.table_type,
-    session.customer_name || '',
+    session.player_one_name || '',
+    session.player_two_name || '',
+    session.loser || '',
+    session.payer_name || '',
     session.customer_phone || '',
-    new Date(session.start_time).toLocaleString('en-IN'),
+    session.start_time ? new Date(session.start_time).toLocaleString('en-IN') : '',
     session.end_time ? new Date(session.end_time).toLocaleString('en-IN') : 'Active',
     session.billed_minutes || 0,
+    baseAmount,
+    session.food_charge || 0,
+    session.tip || 0,
     session.amount || 0,
     session.payment_method || 'CASH',
     session.payment_status || 'PENDING',
     session.is_friendly ? 'Yes' : 'No',
     session.discount_percent || 0,
     session.break_count || 0,
+    session.food_items || '',
     session.notes || ''
   ];
 }
@@ -243,13 +275,15 @@ function mapSessionToReportRow(session) {
 async function fetchSessionsForDate(date) {
   const { startTime, endTime } = getDayBounds(date);
   const db = await getDB();
-  return db.all(`
+  const sessions = await db.all(`
     SELECT s.*, t.type as table_type, t.name as table_name
     FROM sessions s
     JOIN tables t ON s.table_id = t.id
     WHERE s.start_time >= ? AND s.start_time < ?
     ORDER BY s.start_time
   `, startTime, endTime);
+
+  return selectSessionsForExport(sessions, date);
 }
 
 const calculateBillAmount = (table, minutes, { isFriendly = false, discountPercent = 0 } = {}) => {
@@ -3036,4 +3070,4 @@ if (isMainModule) {
   startServer();
 }
 
-export { app };
+export { app, selectSessionsForExport };
