@@ -1,0 +1,39 @@
+# Fly.io configuration for Black Racks Snooker Management
+app = "black-racks-snooker"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  HOST = "0.0.0.0"
+  PORT = "8080"
+  DB_PATH = "/mnt/data/parlor.db"
+  CLUB_TIMEZONE = "Asia/Kolkata"
+  JWT_SECRET = "kJN6RIlxw/Jd/6XxNovdM5e/5sxwlHyz7LTKVbIkm7E="
+  CORS_ORIGIN = "https://black-racks-snooker.fly.dev"
+
+[[services]]
+  internal_port = 8080
+  processes = ["app"]
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.tcp_checks]
+    enabled = true
+    grace_period = "5s"
+    interval = "15s"
+    timeout = "10s"
+
+[[mounts]]
+  source = "data"
+  destination = "/mnt/data"
+  initial_size = "1gb"
