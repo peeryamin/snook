@@ -82,7 +82,7 @@
           <span class="section-subtitle" id="pending-summary">0 bills pending</span>
         </div>
         <div class="table-container">
-          <table class="sessions-table">
+          <table class="sessions-table" id="pending-table">
             <thead>
               <tr>
                 <th>Table</th>
@@ -97,17 +97,40 @@
         </div>
       </section>
 
-      <section class="history-section" id="history-section">
+      <section class="history-section" id="active-section">
         <div class="section-header">
-          <h2>Today's Sessions</h2>
+          <h2>Active Sessions</h2>
+          <span class="section-subtitle" id="active-summary">0 active sessions</span>
         </div>
         <div class="table-container">
-          <table class="sessions-table" id="sessions-table">
+          <table class="sessions-table" id="active-sessions-table">
+            <thead>
+              <tr>
+                <th>Table</th>
+                <th>Player</th>
+                <th>Phone</th>
+                <th>Started</th>
+                <th>Duration</th>
+                <th>Amount</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="active-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="history-section" id="history-section">
+        <div class="section-header">
+          <h2>History</h2>
+          <span class="section-subtitle">Download from admin panel</span>
+        </div>
+        <div class="table-container">
+          <table class="sessions-table" id="history-table">
             <thead>
               <tr>
                 <th>Table</th>
                 <th>Name</th>
-                <th>Phone</th>
                 <th>Start</th>
                 <th>End</th>
                 <th>Duration</th>
@@ -116,27 +139,7 @@
                 <th>Status</th>
               </tr>
             </thead>
-            <tbody id="sessions-tbody"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="history-section" id="players-section">
-        <div class="section-header">
-          <h2>Players Today</h2>
-        </div>
-        <div class="table-container">
-          <table class="sessions-table">
-            <thead>
-              <tr>
-                <th>Player ID</th>
-                <th>Name</th>
-                <th>Phone</th>
-                <th>Sessions</th>
-                <th>Total</th>
-              </tr>
-            </thead>
-            <tbody id="players-tbody"></tbody>
+            <tbody id="history-tbody"></tbody>
           </table>
         </div>
       </section>

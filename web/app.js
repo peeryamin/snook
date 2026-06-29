@@ -303,7 +303,7 @@ class App {
 
     this.renderSessions();
     this.renderPending();
-    this.renderPlayers();
+    this.renderActiveSessions();
     this.updateStats();
   }
 
@@ -414,7 +414,7 @@ class App {
       this.renderTables();
       this.renderSessions();
       this.renderPending();
-      this.renderPlayers();
+      this.renderActiveSessions();
       this.updateStats();
     })();
 
@@ -586,44 +586,65 @@ class App {
   }
 
   renderSessions() {
-    const tbody = document.getElementById('sessions-tbody');
+    const tbody = document.getElementById('history-tbody');
     if (!tbody) return;
     const completed = this.sessions.filter((s) => s.end_time);
     if (!completed.length) {
-      tbody.innerHTML = '<tr><td colspan="9" class="text-center">No sessions today</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="text-center">No history records for today</td></tr>';
       return;
     }
     tbody.innerHTML = completed.map((s) => {
       const tableName = s.table_name || this.getTableName(this.tables.find((t) => t.id === s.table_id));
       const status = s.payment_status === 'PAID' ? '<span class="badge-paid">Paid</span>' : '<span class="badge-pending">Pending</span>';
+      const startTime = s.start_time ? new Date(s.start_time).toLocaleTimeString() : '-';
+      const endTime = s.end_time ? new Date(s.end_time).toLocaleTimeString() : '-';
+      const duration = s.billed_minutes != null ? `${s.billed_minutes}m` : '-';
+      const amount = s.amount != null ? `Rs.${s.amount}` : '-';
       return `<tr>
         <td>${tableName}</td>
         <td>${s.customer_name || '-'}</td>
-        <td>${formatPhoneDisplay(s.customer_phone)}</td>
-        <td>${s.start_time ? new Date(s.start_time).toLocaleTimeString() : '-'}</td>
-        <td>${s.end_time ? new Date(s.end_time).toLocaleTimeString() : '-'}</td>
-        <td>${s.billed_minutes ? `${s.billed_minutes}m` : '-'}</td>
-        <td>${s.amount != null ? `Rs.${s.amount}` : '-'}</td>
+        <td>${startTime}</td>
+        <td>${endTime}</td>
+        <td>${duration}</td>
+        <td>${amount}</td>
         <td>${s.payment_method || '-'}</td>
         <td>${status}</td>
       </tr>`;
     }).join('');
   }
 
-  renderPlayers() {
-    const tbody = document.getElementById('players-tbody');
+  renderActiveSessions() {
+    const tbody = document.getElementById('active-tbody');
+    const summary = document.getElementById('active-summary');
+    const active = this.sessions.filter((s) => !s.end_time);
+    if (summary) {
+      summary.textContent = `${active.length} active session${active.length === 1 ? '' : 's'}`;
+    }
     if (!tbody) return;
-    if (!this.players.length) {
-      tbody.innerHTML = '<tr><td colspan="5" class="text-center">No players yet today</td></tr>';
+    if (!active.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center">No active sessions</td></tr>';
       return;
     }
-    tbody.innerHTML = this.players.map((p) => `<tr>
-      <td>${p.player_code}</td>
-      <td>${p.name}</td>
-      <td>${formatPhoneDisplay(p.phone)}</td>
-      <td>${p.sessions_count}</td>
-      <td>Rs.${p.total_spent}</td>
-    </tr>`).join('');
+    tbody.innerHTML = active.map((s) => {
+      const tableName = s.table_name || this.getTableName(this.tables.find((t) => t.id === s.table_id));
+      const startTime = s.start_time ? new Date(s.start_time).toLocaleTimeString() : '-';
+      const duration = s.billed_minutes != null ? `${s.billed_minutes}m` : '-';
+      const amount = s.amount != null ? `Rs.${s.amount}` : '-';
+      const status = s.payment_status === 'PENDING' ? '<span class="badge-pending">Pending</span>' : '<span class="badge-active">Active</span>';
+      return `<tr>
+        <td>${tableName}</td>
+        <td>${s.customer_name || '-'}</td>
+        <td>${formatPhoneDisplay(s.customer_phone)}</td>
+        <td>${startTime}</td>
+        <td>${duration}</td>
+        <td>${amount}</td>
+        <td>${status}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  renderPlayers() {
+    // players section has been replaced by History. Keep this for backward compatibility only.
   }
 
   showStartModal(tableId) {
