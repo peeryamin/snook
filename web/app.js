@@ -750,8 +750,9 @@ class App {
 
   showStopModal(tableId) {
     const table = this.tables.find((t) => t.id === tableId);
-    if (!table?.active_session) return;
-    const session = table.active_session;
+    const fallbackSession = this.sessions.find((s) => s.table_id === tableId && !s.end_time);
+    const session = table?.active_session || fallbackSession;
+    if (!session) return;
     const elapsed = Number(session.duration_ms || 0) + (session.last_resume_time ? Date.now() - session.last_resume_time : 0);
     const minutes = Math.ceil(elapsed / 60000);
     const perMin = Math.round(minutes * this.getRatePerMinute(table));
@@ -777,7 +778,7 @@ class App {
 
   async confirmStop() {
     const tableId = Number(document.getElementById('stop-table-id').value);
-    const loser = document.querySelector('input[name="loser"]:checked')?.value;
+    const loser = document.querySelector('input[name="loser"]:checked')?.value || 'PLAYER_ONE';
     const foodCharge = Number(document.getElementById('food-charge').value) || 0;
     const tipAmount = Number(document.getElementById('tip-amount').value) || 0;
     const foodItems = document.getElementById('food-items').value.trim();
@@ -849,6 +850,25 @@ class App {
       const data = await res.json();
       return this.toast(data.error || `Failed to ${action}`, 'error');
     }
+
+    const table = this.tables.find((t) => t.id === tableId);
+    const session = this.sessions.find((s) => s.table_id === tableId && !s.end_time);
+
+    if (table && session) {
+      const nextSession = {
+        ...session,
+        last_resume_time: action === 'pause' ? null : Date.now()
+      };
+      this.upsertSessionRecord(nextSession);
+      if (table.active_session) {
+        table.active_session = nextSession;
+      }
+      this.renderTables();
+      this.renderSessions();
+      this.renderActiveSessions();
+      this.updateStats();
+    }
+
     await this.refreshTableById(tableId);
   }
 
