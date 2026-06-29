@@ -805,7 +805,7 @@ class App {
       this.updateStats();
     }
     clearTimeout(this.loadDataTimer);
-    await this.refreshAuxiliaryData();
+    this.refreshAuxiliaryData().catch(() => undefined);
   }
 
   async markPaid(sessionId) {
@@ -821,9 +821,10 @@ class App {
       this.upsertSessionRecord(data.session);
       this.renderSessions();
       this.renderPending();
+      this.renderActiveSessions();
       this.updateStats();
     }
-    await this.refreshAuxiliaryData();
+    this.refreshAuxiliaryData().catch(() => undefined);
   }
 
   async pauseSession(tableId) {
