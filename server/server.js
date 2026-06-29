@@ -622,7 +622,7 @@ app.get('/api/tables', async (req, res) => {
     const enriched = await Promise.all(tables.map(async (table) => {
       const runningData = await computeRunningAmount(table);
       const activeSession = await db.get(`
-        SELECT id, customer_name, start_time, last_resume_time, duration_ms, paused_ms, is_friendly, break_count 
+        SELECT id, customer_name, player_one_name, player_two_name, loser, payer_name, customer_phone, start_time, last_resume_time, duration_ms, paused_ms, is_friendly, break_count 
         FROM sessions 
         WHERE table_id = ? AND end_time IS NULL 
         ORDER BY id DESC LIMIT 1
@@ -675,17 +675,22 @@ app.post('/api/table/:id/start', async (req, res) => {
   try {
     const tableId = parseInt(req.params.id);
     const {
+      player_one_name,
+      player_two_name,
+      player_one_phone = null,
       is_friendly = false,
-      customer_name = null,
-      customer_phone = null,
       notes = null,
       discount_percent = 0,
       payment_method = 'CASH'
     } = req.body;
 
+    if (!player_one_name || !player_two_name) {
+      return res.status(400).json({ error: 'Both player names are required' });
+    }
+
     let normalizedPhone = null;
-    if (customer_phone) {
-      const phoneCheck = validatePhone(customer_phone);
+    if (player_one_phone) {
+      const phoneCheck = validatePhone(player_one_phone);
       if (!phoneCheck.valid) {
         return res.status(400).json({ error: phoneCheck.error });
       }
@@ -708,14 +713,15 @@ app.post('/api/table/:id/start', async (req, res) => {
       }
 
       const startTime = now();
+      const customerName = `${player_one_name} vs ${player_two_name}`;
 
       const sessionResult = await db.run(`
         INSERT INTO sessions (
           table_id, start_time, is_friendly, customer_name, customer_phone,
-          notes, last_resume_time, discount_percent, payment_method
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, tableId, startTime, is_friendly ? 1 : 0, customer_name, normalizedPhone,
-        notes, startTime, discount_percent, payment_method);
+          player_one_name, player_two_name, notes, last_resume_time, discount_percent, payment_method
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, tableId, startTime, is_friendly ? 1 : 0, customerName, normalizedPhone,
+        player_one_name, player_two_name, notes, startTime, discount_percent, payment_method);
 
       await db.run('UPDATE tables SET status = ?, light_on = 1, updated_at = ? WHERE id = ?', 'OCCUPIED', startTime, tableId);
 
@@ -828,7 +834,14 @@ app.post('/api/table/:id/resume', async (req, res) => {
 app.post('/api/table/:id/stop', async (req, res) => {
   try {
     const tableId = parseInt(req.params.id);
-    const { payment_method = 'CASH', discount_percent = 0 } = req.body;
+    const {
+      payment_method = 'CASH',
+      discount_percent = 0,
+      loser = null,
+      food_charge = 0,
+      tip = 0,
+      food_items = ''
+    } = req.body;
 
     const result = await withTransaction(async (db) => {
       const table = await db.get('SELECT * FROM tables WHERE id = ?', tableId);
@@ -842,6 +855,10 @@ app.post('/api/table/:id/stop', async (req, res) => {
         return { error: 'Table or active session not found', status: 404 };
       }
 
+      if (!['PLAYER_ONE', 'PLAYER_TWO'].includes(loser)) {
+        return { error: 'Loser selection is required', status: 400 };
+      }
+
       const endTime = now();
       const additionalMs = session.last_resume_time ? (endTime - session.last_resume_time) : 0;
       const totalDurationMs = (session.duration_ms || 0) + additionalMs;
@@ -849,8 +866,12 @@ app.post('/api/table/:id/stop', async (req, res) => {
       const perMinuteAmount = Math.round(billedMinutes * getRatePerMinute(table));
       const baseAmount = session.is_friendly ? 0 : Math.max(table.minimum_charge || 0, perMinuteAmount);
       const discountAmount = session.is_friendly ? 0 : Math.round(baseAmount * (discount_percent / 100));
-      const finalAmount = session.is_friendly ? 0 : (baseAmount - discountAmount);
+      const sessionAmount = session.is_friendly ? 0 : (baseAmount - discountAmount);
+      const totalFood = Number(food_charge) || 0;
+      const totalTip = Number(tip) || 0;
+      const finalAmount = session.is_friendly ? 0 : sessionAmount + totalFood + totalTip;
       const paymentStatus = session.is_friendly || finalAmount === 0 ? 'PAID' : 'PENDING';
+      const payerName = loser === 'PLAYER_ONE' ? session.player_one_name : session.player_two_name;
 
       await db.run(`
         UPDATE sessions SET
@@ -860,16 +881,22 @@ app.post('/api/table/:id/stop', async (req, res) => {
           amount = ?,
           payment_method = ?,
           discount_percent = ?,
-          payment_status = ?
+          payment_status = ?,
+          loser = ?,
+          food_charge = ?,
+          tip = ?,
+          food_items = ?,
+          payer_name = ?
         WHERE id = ?
-      `, endTime, totalDurationMs, billedMinutes, finalAmount, payment_method, discount_percent, paymentStatus, session.id);
+      `, endTime, totalDurationMs, billedMinutes, finalAmount, payment_method, discount_percent,
+        paymentStatus, loser, totalFood, totalTip, food_items, payerName, session.id);
 
       await db.run('UPDATE tables SET status = ?, light_on = 0, updated_at = ? WHERE id = ?', 'AVAILABLE', endTime, tableId);
 
       const today = new Date().toISOString().slice(0, 10);
-      if (session.customer_name && !session.is_friendly) {
+      if (payerName && !session.is_friendly) {
         await upsertDailyPlayer(db, {
-          name: session.customer_name,
+          name: payerName,
           phone: session.customer_phone,
           amount: finalAmount,
           date: today
@@ -893,7 +920,10 @@ app.post('/api/table/:id/stop', async (req, res) => {
           duration: formatDuration(totalDurationMs),
           minutes: billedMinutes,
           rate: `₹${getRatePerMinute(table)}/min (min ₹${table.minimum_charge || 0})`,
-          discount: discount_percent > 0 ? `${discount_percent}%` : null
+          discount: discount_percent > 0 ? `${discount_percent}%` : null,
+          food_charge: totalFood,
+          tip: totalTip,
+          loser: payerName
         }
       };
     });

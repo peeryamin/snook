@@ -86,7 +86,8 @@
             <thead>
               <tr>
                 <th>Table</th>
-                <th>Player</th>
+                <th>Players</th>
+                <th>Payer</th>
                 <th>Amount</th>
                 <th>Method</th>
                 <th>Action</th>
@@ -130,11 +131,15 @@
             <thead>
               <tr>
                 <th>Table</th>
-                <th>Name</th>
+                <th>Players</th>
+                <th>Payer</th>
                 <th>Start</th>
                 <th>End</th>
                 <th>Duration</th>
-                <th>Amount</th>
+                <th>Session</th>
+                <th>Food</th>
+                <th>Tip</th>
+                <th>Total</th>
                 <th>Method</th>
                 <th>Status</th>
               </tr>
@@ -158,12 +163,14 @@
           <label>Table</label>
           <div id="selected-table-info" class="table-info-box"></div>
         </div>
+        <div class="form-group autocomplete-container">
+          <label for="player-one-name">Player One</label>
+          <input type="text" id="player-one-name" class="form-control" placeholder="Enter first player's name" autocomplete="off" required>
+          <div id="player-suggestions" class="autocomplete-suggestions"></div>
+        </div>
         <div class="form-group">
-          <label for="customer-name">Player Name</label>
-          <div class="autocomplete-container">
-            <input type="text" id="customer-name" class="form-control" placeholder="Enter player name" autocomplete="off" required>
-            <div id="customer-suggestions" class="autocomplete-suggestions"></div>
-          </div>
+          <label for="player-two-name">Player Two</label>
+          <input type="text" id="player-two-name" class="form-control" placeholder="Enter second player's name" autocomplete="off" required>
         </div>
         <div class="form-group">
           <label for="customer-phone-local">Phone (optional)</label>
@@ -202,6 +209,28 @@
       <div class="modal-body">
         <input type="hidden" id="stop-table-id">
         <div class="session-summary" id="session-summary"></div>
+        <div class="form-group">
+          <label>Players</label>
+          <div id="stop-player-names" class="summary-block"></div>
+        </div>
+        <div class="form-group">
+          <label>Who lost?</label>
+          <label class="radio-option"><input type="radio" name="loser" value="PLAYER_ONE" checked> Player One</label>
+          <label class="radio-option"><input type="radio" name="loser" value="PLAYER_TWO"> Player Two</label>
+          <small class="form-hint">The loser pays the bill.</small>
+        </div>
+        <div class="form-group">
+          <label for="food-charge">Food charge (Rs.)</label>
+          <input type="number" id="food-charge" class="form-control" min="0" step="1" value="0">
+        </div>
+        <div class="form-group">
+          <label for="food-items">Food items</label>
+          <input type="text" id="food-items" class="form-control" placeholder="What they ordered (e.g. fries, tea)">
+        </div>
+        <div class="form-group">
+          <label for="tip-amount">Tip amount (Rs.)</label>
+          <input type="number" id="tip-amount" class="form-control" min="0" step="1" value="0">
+        </div>
         <div class="form-group">
           <label for="final-payment-method">How will they pay?</label>
           <select id="final-payment-method" class="form-control">

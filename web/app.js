@@ -77,6 +77,7 @@ class App {
     this.players = [];
     this.todaySummary = {};
     this.eventSource = null;
+    this.sseReconnectTimer = null;
     this.timers = new Map();
     this.suggestionIndex = -1;
     this.suggestions = [];
@@ -431,11 +432,31 @@ class App {
   }
 
   connectSSE() {
-    if (this.eventSource) this.eventSource.close();
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
+    if (this.sseReconnectTimer) {
+      clearTimeout(this.sseReconnectTimer);
+      this.sseReconnectTimer = null;
+    }
+
     const token = this.auth.token;
     this.eventSource = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
-    this.eventSource.addEventListener('connected', () => this.setOnline(true));
-    this.eventSource.onerror = () => this.setOnline(false);
+
+    this.eventSource.addEventListener('connected', () => {
+      this.setOnline(true);
+      if (this.sseReconnectTimer) {
+        clearTimeout(this.sseReconnectTimer);
+        this.sseReconnectTimer = null;
+      }
+    });
+
+    this.eventSource.onerror = () => {
+      this.setOnline(false);
+      this.scheduleSseReconnect();
+    };
+
     ['session:start', 'session:stop', 'session:pause', 'session:resume', 'session:paid', 'table:update'].forEach((evt) => {
       this.eventSource.addEventListener(evt, (e) => this.handleRealtimeEvent(evt, e));
     });
@@ -447,6 +468,14 @@ class App {
     if (dot) dot.classList.toggle('online', online);
     if (dot) dot.classList.toggle('offline', !online);
     if (text) text.textContent = online ? 'Connected' : 'Offline';
+  }
+
+  scheduleSseReconnect(delay = 2000) {
+    if (this.sseReconnectTimer) return;
+    this.sseReconnectTimer = setTimeout(() => {
+      this.sseReconnectTimer = null;
+      this.connectSSE();
+    }, delay);
   }
 
   updateStats() {
@@ -570,14 +599,17 @@ class App {
     }
     if (!tbody) return;
     if (!pending.length) {
-      tbody.innerHTML = '<tr><td colspan="5" class="text-center">No pending payments</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center">No pending payments</td></tr>';
       return;
     }
     tbody.innerHTML = pending.map((s) => {
       const tableName = s.table_name || this.getTableName(this.tables.find((t) => t.id === s.table_id));
+      const players = `${s.player_one_name || 'Player One'} vs ${s.player_two_name || 'Player Two'}`;
+      const payer = s.payer_name || (s.loser === 'PLAYER_ONE' ? s.player_one_name : s.player_two_name) || 'Unknown';
       return `<tr>
         <td>${tableName}</td>
-        <td>${s.customer_name || 'Walk-in'}</td>
+        <td>${players}</td>
+        <td>${payer}</td>
         <td>Rs.${s.amount}</td>
         <td>${s.payment_method || 'CASH'}</td>
         <td><button class="btn btn-success btn-sm" onclick="app.markPaid(${s.id})">Mark as Paid</button></td>
@@ -590,23 +622,32 @@ class App {
     if (!tbody) return;
     const completed = this.sessions.filter((s) => s.end_time);
     if (!completed.length) {
-      tbody.innerHTML = '<tr><td colspan="9" class="text-center">No history records for today</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="12" class="text-center">No history records for today</td></tr>';
       return;
     }
     tbody.innerHTML = completed.map((s) => {
       const tableName = s.table_name || this.getTableName(this.tables.find((t) => t.id === s.table_id));
+      const players = `${s.player_one_name || 'Player One'} vs ${s.player_two_name || 'Player Two'}`;
+      const payer = s.payer_name || (s.loser === 'PLAYER_ONE' ? s.player_one_name : s.player_two_name) || 'Unknown';
       const status = s.payment_status === 'PAID' ? '<span class="badge-paid">Paid</span>' : '<span class="badge-pending">Pending</span>';
       const startTime = s.start_time ? new Date(s.start_time).toLocaleTimeString() : '-';
       const endTime = s.end_time ? new Date(s.end_time).toLocaleTimeString() : '-';
       const duration = s.billed_minutes != null ? `${s.billed_minutes}m` : '-';
-      const amount = s.amount != null ? `Rs.${s.amount}` : '-';
+      const sessionAmount = s.amount != null ? `Rs.${s.amount - (s.food_charge || 0) - (s.tip || 0)}` : '-';
+      const foodAmount = s.food_charge != null ? `Rs.${s.food_charge}` : '-';
+      const tipAmount = s.tip != null ? `Rs.${s.tip}` : '-';
+      const totalAmount = s.amount != null ? `Rs.${s.amount}` : '-';
       return `<tr>
         <td>${tableName}</td>
-        <td>${s.customer_name || '-'}</td>
+        <td>${players}</td>
+        <td>${payer}</td>
         <td>${startTime}</td>
         <td>${endTime}</td>
         <td>${duration}</td>
-        <td>${amount}</td>
+        <td>${sessionAmount}</td>
+        <td>${foodAmount}</td>
+        <td>${tipAmount}</td>
+        <td>${totalAmount}</td>
         <td>${s.payment_method || '-'}</td>
         <td>${status}</td>
       </tr>`;
@@ -627,13 +668,14 @@ class App {
     }
     tbody.innerHTML = active.map((s) => {
       const tableName = s.table_name || this.getTableName(this.tables.find((t) => t.id === s.table_id));
+      const players = `${s.player_one_name || 'Player One'} vs ${s.player_two_name || 'Player Two'}`;
       const startTime = s.start_time ? new Date(s.start_time).toLocaleTimeString() : '-';
       const duration = s.billed_minutes != null ? `${s.billed_minutes}m` : '-';
       const amount = s.amount != null ? `Rs.${s.amount}` : '-';
       const status = s.payment_status === 'PENDING' ? '<span class="badge-pending">Pending</span>' : '<span class="badge-active">Active</span>';
       return `<tr>
         <td>${tableName}</td>
-        <td>${s.customer_name || '-'}</td>
+        <td>${players}</td>
         <td>${formatPhoneDisplay(s.customer_phone)}</td>
         <td>${startTime}</td>
         <td>${duration}</td>
@@ -655,25 +697,27 @@ class App {
       <strong>${this.getTableName(table)}</strong>
       <span>Rs.${this.getRatePerMinute(table)}/min, minimum Rs.${table.minimum_charge || 0}</span>
     `;
-    document.getElementById('customer-name').value = '';
+    document.getElementById('player-one-name').value = '';
+    document.getElementById('player-two-name').value = '';
     document.getElementById('customer-phone-local').value = '';
     document.getElementById('is-friendly').checked = false;
-    document.getElementById('customer-suggestions').innerHTML = '';
+    document.getElementById('player-suggestions').innerHTML = '';
     document.getElementById('start-session-modal').classList.add('show');
-    document.getElementById('customer-name').focus();
+    document.getElementById('player-one-name').focus();
   }
 
   async submitStart(e) {
     e.preventDefault();
     const tableId = Number(document.getElementById('selected-table-id').value);
-    const customer_name = document.getElementById('customer-name').value.trim();
+    const player_one_name = document.getElementById('player-one-name').value.trim();
+    const player_two_name = document.getElementById('player-two-name').value.trim();
     const phoneCheck = normalizePhoneLocalInput(document.getElementById('customer-phone-local').value);
     if (!phoneCheck.valid) {
       this.toast(phoneCheck.error, 'error');
       return;
     }
-    if (!customer_name) {
-      this.toast('Player name is required', 'error');
+    if (!player_one_name || !player_two_name) {
+      this.toast('Both player names are required', 'error');
       return;
     }
 
@@ -681,8 +725,9 @@ class App {
       method: 'POST',
       headers: this.auth.getAuthHeaders(),
       body: JSON.stringify({
-        customer_name,
-        customer_phone: phoneCheck.phone,
+        player_one_name,
+        player_two_name,
+        player_one_phone: phoneCheck.phone,
         is_friendly: document.getElementById('is-friendly').checked
       })
     });
@@ -709,23 +754,38 @@ class App {
     const amount = this.calculateBill(table, minutes, session.is_friendly);
 
     document.getElementById('stop-table-id').value = tableId;
+    document.getElementById('stop-player-names').innerHTML = `
+      <div>${session.player_one_name || 'Player One'}</div>
+      <div>${session.player_two_name || 'Player Two'}</div>
+    `;
     document.getElementById('session-summary').innerHTML = `
       <div class="summary-row"><span>Table</span><span>${this.getTableName(table)}</span></div>
-      <div class="summary-row"><span>Player</span><span>${session.customer_name || 'Walk-in'}</span></div>
       <div class="summary-row"><span>Duration</span><span>${minutes} minutes</span></div>
       <div class="summary-row"><span>Per-minute total</span><span>Rs.${perMin}</span></div>
-      <div class="summary-row summary-total"><span>Bill amount</span><span>Rs.${amount}</span></div>
+      <div class="summary-row summary-total"><span>Session bill</span><span>Rs.${amount}</span></div>
     `;
+    document.getElementById('food-charge').value = '0';
+    document.getElementById('tip-amount').value = '0';
+    document.getElementById('food-items').value = '';
+    document.querySelector('input[name="loser"][value="PLAYER_ONE"]').checked = true;
     document.getElementById('stop-session-modal').classList.add('show');
   }
 
   async confirmStop() {
     const tableId = Number(document.getElementById('stop-table-id').value);
+    const loser = document.querySelector('input[name="loser"]:checked')?.value;
+    const foodCharge = Number(document.getElementById('food-charge').value) || 0;
+    const tipAmount = Number(document.getElementById('tip-amount').value) || 0;
+    const foodItems = document.getElementById('food-items').value.trim();
     const res = await fetch(`/api/table/${tableId}/stop`, {
       method: 'POST',
       headers: this.auth.getAuthHeaders(),
       body: JSON.stringify({
-        payment_method: document.getElementById('final-payment-method').value
+        payment_method: document.getElementById('final-payment-method').value,
+        loser,
+        food_charge: foodCharge,
+        tip: tipAmount,
+        food_items: foodItems
       })
     });
     if (res.status === 401) return this.auth.handleAuthError();
@@ -737,7 +797,13 @@ class App {
       this.patchTableFromApi(data.table, null);
       this.renderTables();
     }
-    if (data.session) this.upsertSessionRecord(data.session);
+    if (data.session) {
+      this.upsertSessionRecord(data.session);
+      this.renderSessions();
+      this.renderPending();
+      this.renderActiveSessions();
+      this.updateStats();
+    }
     clearTimeout(this.loadDataTimer);
     await this.refreshAuxiliaryData();
   }
@@ -751,6 +817,12 @@ class App {
     const data = await res.json();
     if (!res.ok) return this.toast(data.error || 'Failed to update payment', 'error');
     this.toast('Payment confirmed', 'success');
+    if (data.session) {
+      this.upsertSessionRecord(data.session);
+      this.renderSessions();
+      this.renderPending();
+      this.updateStats();
+    }
     await this.refreshAuxiliaryData();
   }
 
@@ -786,8 +858,8 @@ class App {
   }
 
   setupAutocomplete() {
-    const input = document.getElementById('customer-name');
-    const box = document.getElementById('customer-suggestions');
+    const input = document.getElementById('player-one-name');
+    const box = document.getElementById('player-suggestions');
     if (!input || !box) return;
 
     let timer;
@@ -855,10 +927,10 @@ class App {
   }
 
   pickSuggestion(player) {
-    document.getElementById('customer-name').value = player.name;
+    document.getElementById('player-one-name').value = player.name;
     document.getElementById('customer-phone-local').value = phoneToLocalInput(player.phone);
-    document.getElementById('customer-suggestions').innerHTML = '';
-    document.getElementById('customer-suggestions').style.display = 'none';
+    document.getElementById('player-suggestions').innerHTML = '';
+    document.getElementById('player-suggestions').style.display = 'none';
     this.suggestions = [];
   }
 

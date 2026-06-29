@@ -206,6 +206,29 @@ async function runAdditionalMigrations(db) {
       console.log('✅ Added minimum_charge column');
     }
 
+    const sessionColumns = [
+      { name: 'player_one_name', sql: "ALTER TABLE sessions ADD COLUMN player_one_name TEXT" },
+      { name: 'player_two_name', sql: "ALTER TABLE sessions ADD COLUMN player_two_name TEXT" },
+      { name: 'loser', sql: "ALTER TABLE sessions ADD COLUMN loser TEXT" },
+      { name: 'food_charge', sql: "ALTER TABLE sessions ADD COLUMN food_charge INTEGER NOT NULL DEFAULT 0" },
+      { name: 'tip', sql: "ALTER TABLE sessions ADD COLUMN tip INTEGER NOT NULL DEFAULT 0" },
+      { name: 'food_items', sql: "ALTER TABLE sessions ADD COLUMN food_items TEXT" },
+      { name: 'payer_name', sql: "ALTER TABLE sessions ADD COLUMN payer_name TEXT" }
+    ];
+
+    for (const column of sessionColumns) {
+      const result = await db.get(`
+        SELECT COUNT(*) as count
+        FROM pragma_table_info('sessions')
+        WHERE name = ?
+      `, column.name);
+      if (result.count === 0) {
+        console.log(`📝 Adding ${column.name} column to sessions...`);
+        await db.exec(column.sql);
+        console.log(`✅ Added ${column.name} column`);
+      }
+    }
+
     const loyaltyColumnExists = await db.get(`
       SELECT COUNT(*) as count
       FROM pragma_table_info('customers')
