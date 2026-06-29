@@ -137,8 +137,8 @@
                 <th>End</th>
                 <th>Duration</th>
                 <th>Session</th>
-                <th>Food</th>
-                <th>Tip</th>
+                <th>Food (P1)</th>
+                <th>Food (P2)</th>
                 <th>Total</th>
                 <th>Method</th>
                 <th>Status</th>
@@ -210,26 +210,26 @@
         <input type="hidden" id="stop-table-id">
         <div class="session-summary" id="session-summary"></div>
         <div class="form-group">
-          <label>Players</label>
-          <div id="stop-player-names" class="summary-block"></div>
-        </div>
-        <div class="form-group">
           <label>Who lost?</label>
-          <label class="radio-option"><input type="radio" name="loser" value="PLAYER_ONE" checked> Player One</label>
-          <label class="radio-option"><input type="radio" name="loser" value="PLAYER_TWO"> Player Two</label>
-          <small class="form-hint">The loser pays the bill.</small>
+          <label class="radio-option"><input type="radio" name="loser" value="PLAYER_ONE" checked> <span data-testid="loser-name-p1" id="loser-label-p1">Player One</span></label>
+          <label class="radio-option"><input type="radio" name="loser" value="PLAYER_TWO"> <span data-testid="loser-name-p2" id="loser-label-p2">Player Two</span></label>
+          <small class="form-hint">The loser pays the game time bill. Food is billed per player.</small>
         </div>
         <div class="form-group">
-          <label for="food-charge">Food charge (Rs.)</label>
-          <input type="number" id="food-charge" class="form-control" min="0" step="1" value="0">
+          <label id="food-p1-label" for="food-charge-p1">Food charge — <span id="food-p1-name">Player One</span> (Rs.)</label>
+          <input type="number" id="food-charge-p1" data-testid="food-charge-p1" class="form-control" min="0" step="1" value="0">
         </div>
         <div class="form-group">
-          <label for="food-items">Food items</label>
-          <input type="text" id="food-items" class="form-control" placeholder="What they ordered (e.g. fries, tea)">
+          <label for="food-items-p1">Food items — <span id="food-p1-name-items">Player One</span></label>
+          <input type="text" id="food-items-p1" data-testid="food-items-p1" class="form-control" placeholder="What this player ordered (e.g. fries, tea)">
         </div>
         <div class="form-group">
-          <label for="tip-amount">Tip amount (Rs.)</label>
-          <input type="number" id="tip-amount" class="form-control" min="0" step="1" value="0">
+          <label id="food-p2-label" for="food-charge-p2">Food charge — <span id="food-p2-name">Player Two</span> (Rs.)</label>
+          <input type="number" id="food-charge-p2" data-testid="food-charge-p2" class="form-control" min="0" step="1" value="0">
+        </div>
+        <div class="form-group">
+          <label for="food-items-p2">Food items — <span id="food-p2-name-items">Player Two</span></label>
+          <input type="text" id="food-items-p2" data-testid="food-items-p2" class="form-control" placeholder="What this player ordered (e.g. fries, tea)">
         </div>
         <div class="form-group">
           <label for="final-payment-method">How will they pay?</label>
@@ -240,9 +240,10 @@
           </select>
           <small class="form-hint">Payment is recorded as pending until you confirm it was received.</small>
         </div>
+        <div class="bills-preview" id="bills-preview" data-testid="bills-preview"></div>
         <div class="modal-actions modal-actions-polished">
           <button type="button" class="btn btn-secondary btn-lg modal-close">Cancel</button>
-          <button type="button" class="btn btn-primary btn-lg" id="confirm-stop">Stop and Save Bill</button>
+          <button type="button" class="btn btn-primary btn-lg" id="confirm-stop" data-testid="confirm-stop-btn">Stop and Save Bill</button>
         </div>
       </div>
     </div>

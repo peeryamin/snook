@@ -240,12 +240,16 @@ function selectSessionsForExport(sessions, date) {
 const SESSION_REPORT_HEADERS = [
   'Session ID', 'Table', 'Table Type', 'Player One', 'Player Two', 'Loser', 'Payer',
   'Phone', 'Start Time', 'End Time', 'Duration (min)', 'Base Amount (Rs)',
-  'Food Charge (Rs)', 'Tip (Rs)', 'Total Amount (Rs)', 'Payment Method',
-  'Payment Status', 'Friendly Game', 'Discount %', 'Break Count', 'Food Items', 'Notes'
+  'Food P1 (Rs)', 'Food Items P1', 'Food P2 (Rs)', 'Food Items P2',
+  'Food Total (Rs)', 'Total Amount (Rs)', 'Payment Method',
+  'Payment Status', 'Friendly Game', 'Discount %', 'Break Count', 'Notes'
 ];
 
 function mapSessionToReportRow(session) {
-  const baseAmount = Math.max(0, Number(session.amount || 0) - Number(session.food_charge || 0) - Number(session.tip || 0));
+  const foodP1 = Number(session.food_charge_p1 || 0);
+  const foodP2 = Number(session.food_charge_p2 || 0);
+  const foodTotal = Number(session.food_charge || (foodP1 + foodP2)) || 0;
+  const baseAmount = Math.max(0, Number(session.amount || 0) - foodTotal);
   return [
     session.id,
     session.table_name || `Table ${session.table_id}`,
@@ -259,15 +263,17 @@ function mapSessionToReportRow(session) {
     session.end_time ? new Date(session.end_time).toLocaleString('en-IN') : 'Active',
     session.billed_minutes || 0,
     baseAmount,
-    session.food_charge || 0,
-    session.tip || 0,
+    foodP1,
+    session.food_items_p1 || '',
+    foodP2,
+    session.food_items_p2 || '',
+    foodTotal,
     session.amount || 0,
     session.payment_method || 'CASH',
     session.payment_status || 'PENDING',
     session.is_friendly ? 'Yes' : 'No',
     session.discount_percent || 0,
     session.break_count || 0,
-    session.food_items || '',
     session.notes || ''
   ];
 }
@@ -872,8 +878,13 @@ app.post('/api/table/:id/stop', async (req, res) => {
       payment_method = 'CASH',
       discount_percent = 0,
       loser = null,
+      // New per-player fields (preferred)
+      food_charge_p1: foodChargeP1Raw,
+      food_items_p1: foodItemsP1Raw,
+      food_charge_p2: foodChargeP2Raw,
+      food_items_p2: foodItemsP2Raw,
+      // Legacy single-player fields (still accepted for back-compat)
       food_charge = 0,
-      tip = 0,
       food_items = ''
     } = req.body;
 
@@ -893,6 +904,23 @@ app.post('/api/table/:id/stop', async (req, res) => {
         return { error: 'Loser selection is required', status: 400 };
       }
 
+      // Resolve per-player food. If only legacy `food_charge` was sent, assign it to the loser by default.
+      const hasPerPlayer = foodChargeP1Raw !== undefined || foodChargeP2Raw !== undefined
+        || foodItemsP1Raw !== undefined || foodItemsP2Raw !== undefined;
+      let foodP1 = Math.max(0, Number(foodChargeP1Raw) || 0);
+      let foodP2 = Math.max(0, Number(foodChargeP2Raw) || 0);
+      let itemsP1 = (foodItemsP1Raw || '').toString();
+      let itemsP2 = (foodItemsP2Raw || '').toString();
+      if (!hasPerPlayer) {
+        const legacyFood = Math.max(0, Number(food_charge) || 0);
+        const legacyItems = (food_items || '').toString();
+        if (loser === 'PLAYER_ONE') {
+          foodP1 = legacyFood; itemsP1 = legacyItems;
+        } else {
+          foodP2 = legacyFood; itemsP2 = legacyItems;
+        }
+      }
+
       const endTime = now();
       const additionalMs = session.last_resume_time ? (endTime - session.last_resume_time) : 0;
       const totalDurationMs = (session.duration_ms || 0) + additionalMs;
@@ -901,11 +929,16 @@ app.post('/api/table/:id/stop', async (req, res) => {
       const baseAmount = session.is_friendly ? 0 : Math.max(table.minimum_charge || 0, perMinuteAmount);
       const discountAmount = session.is_friendly ? 0 : Math.round(baseAmount * (discount_percent / 100));
       const sessionAmount = session.is_friendly ? 0 : (baseAmount - discountAmount);
-      const totalFood = Number(food_charge) || 0;
-      const totalTip = Number(tip) || 0;
-      const finalAmount = session.is_friendly ? 0 : sessionAmount + totalFood + totalTip;
+      const totalFood = foodP1 + foodP2;
+      const totalTip = 0;
+      const finalAmount = session.is_friendly ? 0 : sessionAmount + totalFood;
       const paymentStatus = session.is_friendly || finalAmount === 0 ? 'PAID' : 'PENDING';
       const payerName = loser === 'PLAYER_ONE' ? session.player_one_name : session.player_two_name;
+      const winnerName = loser === 'PLAYER_ONE' ? session.player_two_name : session.player_one_name;
+      const combinedItems = [
+        itemsP1 ? `${session.player_one_name || 'Player One'}: ${itemsP1}` : '',
+        itemsP2 ? `${session.player_two_name || 'Player Two'}: ${itemsP2}` : ''
+      ].filter(Boolean).join(' | ');
 
       await db.run(`
         UPDATE sessions SET
@@ -920,10 +953,15 @@ app.post('/api/table/:id/stop', async (req, res) => {
           food_charge = ?,
           tip = ?,
           food_items = ?,
-          payer_name = ?
+          payer_name = ?,
+          food_charge_p1 = ?,
+          food_items_p1 = ?,
+          food_charge_p2 = ?,
+          food_items_p2 = ?
         WHERE id = ?
       `, endTime, totalDurationMs, billedMinutes, finalAmount, payment_method, discount_percent,
-        paymentStatus, loser, totalFood, totalTip, food_items, payerName, session.id);
+        paymentStatus, loser, totalFood, totalTip, combinedItems, payerName,
+        foodP1, itemsP1, foodP2, itemsP2, session.id);
 
       await db.run('UPDATE tables SET status = ?, light_on = 0, updated_at = ? WHERE id = ?', 'AVAILABLE', endTime, tableId);
 
@@ -946,6 +984,26 @@ app.post('/api/table/:id/stop', async (req, res) => {
       const finalSession = await db.get('SELECT * FROM sessions WHERE id = ?', session.id);
       const updatedTable = await db.get('SELECT * FROM tables WHERE id = ?', tableId);
 
+      // Build the two per-player bills. Game charge is paid only by the loser.
+      const gameForP1 = loser === 'PLAYER_ONE' ? sessionAmount : 0;
+      const gameForP2 = loser === 'PLAYER_TWO' ? sessionAmount : 0;
+      const billP1 = {
+        player: session.player_one_name || 'Player One',
+        role: loser === 'PLAYER_ONE' ? 'loser' : 'winner',
+        game_amount: gameForP1,
+        food_charge: foodP1,
+        food_items: itemsP1,
+        total: gameForP1 + foodP1
+      };
+      const billP2 = {
+        player: session.player_two_name || 'Player Two',
+        role: loser === 'PLAYER_TWO' ? 'loser' : 'winner',
+        game_amount: gameForP2,
+        food_charge: foodP2,
+        food_items: itemsP2,
+        total: gameForP2 + foodP2
+      };
+
       return {
         finalSession,
         updatedTable,
@@ -956,8 +1014,14 @@ app.post('/api/table/:id/stop', async (req, res) => {
           rate: `₹${getRatePerMinute(table)}/min (min ₹${table.minimum_charge || 0})`,
           discount: discount_percent > 0 ? `${discount_percent}%` : null,
           food_charge: totalFood,
-          tip: totalTip,
-          loser: payerName
+          food_charge_p1: foodP1,
+          food_charge_p2: foodP2,
+          food_items_p1: itemsP1,
+          food_items_p2: itemsP2,
+          game_amount: sessionAmount,
+          loser: payerName,
+          winner: winnerName,
+          bills: [billP1, billP2]
         }
       };
     });

@@ -529,27 +529,34 @@ class App {
 
   createTableCard(table) {
     const card = document.createElement('div');
-    card.className = `table-card ${table.status.toLowerCase()}`;
     const occupied = table.status === 'OCCUPIED';
+    const isPaused = occupied && !!table.active_session && !table.active_session.last_resume_time;
+    const stateClass = occupied ? (isPaused ? 'paused' : 'occupied') : table.status.toLowerCase();
+    card.className = `table-card ${stateClass}`;
+    card.dataset.tableId = String(table.id);
     const name = this.getTableName(table);
     const rate = this.getRatePerMinute(table);
     const min = table.minimum_charge || 0;
 
+    const statusLabel = isPaused ? 'PAUSED' : table.status;
+    const statusClass = isPaused ? 'paused' : table.status.toLowerCase();
+
     card.innerHTML = `
       <div class="table-header">
         <div class="table-number">${name}</div>
-        <div class="status-badge ${table.status.toLowerCase()}">${table.status}</div>
+        <div class="status-badge ${statusClass}" data-testid="table-${table.id}-status">${statusLabel}</div>
       </div>
       <div class="table-info">
         <div class="rate-display">Rs.${rate}/min, minimum Rs.${min}</div>
         ${occupied ? `
-          <div class="session-details">
-            <div class="session-timer" data-table-id="${table.id}">00:00:00</div>
+          <div class="session-details ${isPaused ? 'is-paused' : ''}">
+            ${isPaused ? `<div class="paused-banner" data-testid="paused-banner-${table.id}"><span class="paused-dot"></span> Session Paused</div>` : ''}
+            <div class="session-timer ${isPaused ? 'is-paused' : ''}" data-table-id="${table.id}" data-testid="timer-${table.id}">00:00:00</div>
             <div class="running-amount">Rs.${(table.running_amount || 0).toLocaleString('en-IN')}</div>
             ${table.active_session?.customer_name ? `<div class="customer-info">${table.active_session.customer_name}</div>` : ''}
           </div>` : ''}
       </div>
-      <div class="table-actions">${this.tableActions(table)}</div>
+      <div class="table-actions" data-testid="table-${table.id}-actions">${this.tableActions(table, isPaused)}</div>
     `;
 
     if (occupied && table.active_session) {
@@ -558,23 +565,29 @@ class App {
     return card;
   }
 
-  tableActions(table) {
+  tableActions(table, isPausedArg) {
     if (table.status === 'OCCUPIED') {
+      const isPaused = typeof isPausedArg === 'boolean'
+        ? isPausedArg
+        : !!table.active_session && !table.active_session.last_resume_time;
+      const toggle = isPaused
+        ? `<button class="btn btn-success btn-sm action-btn" data-action="resume" data-testid="resume-btn-${table.id}" onclick="app.resumeSession(${table.id})"><span class="btn-label">▶ Resume</span></button>`
+        : `<button class="btn btn-warning btn-sm action-btn" data-action="pause" data-testid="pause-btn-${table.id}" onclick="app.pauseSession(${table.id})"><span class="btn-label">⏸ Pause</span></button>`;
       return `
-        <button class="btn btn-warning btn-sm" onclick="app.pauseSession(${table.id})">Pause</button>
-        <button class="btn btn-success btn-sm" onclick="app.resumeSession(${table.id})">Resume</button>
-        <button class="btn btn-danger btn-sm" onclick="app.showStopModal(${table.id})">Stop</button>
+        ${toggle}
+        <button class="btn btn-danger btn-sm action-btn" data-action="stop" data-testid="stop-btn-${table.id}" onclick="app.showStopModal(${table.id})"><span class="btn-label">⏹ Stop</span></button>
       `;
     }
     if (table.status === 'MAINTENANCE') {
       return `<button class="btn btn-success btn-sm" onclick="app.setStatus(${table.id}, 'AVAILABLE')">Mark Available</button>`;
     }
-    return `<button class="btn btn-primary" onclick="app.showStartModal(${table.id})">Start Session</button>`;
+    return `<button class="btn btn-primary" data-testid="start-btn-${table.id}" onclick="app.showStartModal(${table.id})">Start Session</button>`;
   }
 
   startTimer(tableId, session) {
     if (this.timers.has(tableId)) clearInterval(this.timers.get(tableId));
     const sessionSnapshot = { ...session };
+    const isPaused = !sessionSnapshot.last_resume_time;
     const tick = () => {
       const activeMs = sessionSnapshot.last_resume_time ? Date.now() - sessionSnapshot.last_resume_time : 0;
       const elapsed = Math.max(0, Number(sessionSnapshot.duration_ms || 0) + activeMs);
@@ -586,7 +599,9 @@ class App {
       el.textContent = `${String(h).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
     };
     tick();
-    this.timers.set(tableId, setInterval(tick, 1000));
+    if (!isPaused) {
+      this.timers.set(tableId, setInterval(tick, 1000));
+    }
   }
 
   renderPending() {
@@ -633,9 +648,9 @@ class App {
       const startTime = s.start_time ? new Date(s.start_time).toLocaleTimeString() : '-';
       const endTime = s.end_time ? new Date(s.end_time).toLocaleTimeString() : '-';
       const duration = s.billed_minutes != null ? `${s.billed_minutes}m` : '-';
-      const sessionAmount = s.amount != null ? `Rs.${s.amount - (s.food_charge || 0) - (s.tip || 0)}` : '-';
-      const foodAmount = s.food_charge != null ? `Rs.${s.food_charge}` : '-';
-      const tipAmount = s.tip != null ? `Rs.${s.tip}` : '-';
+      const sessionAmount = s.amount != null ? `Rs.${s.amount - (s.food_charge || 0)}` : '-';
+      const foodP1 = s.food_charge_p1 != null ? `Rs.${s.food_charge_p1}` : (s.food_charge != null && s.loser === 'PLAYER_ONE' ? `Rs.${s.food_charge}` : 'Rs.0');
+      const foodP2 = s.food_charge_p2 != null ? `Rs.${s.food_charge_p2}` : (s.food_charge != null && s.loser === 'PLAYER_TWO' ? `Rs.${s.food_charge}` : 'Rs.0');
       const totalAmount = s.amount != null ? `Rs.${s.amount}` : '-';
       return `<tr>
         <td>${tableName}</td>
@@ -645,8 +660,8 @@ class App {
         <td>${endTime}</td>
         <td>${duration}</td>
         <td>${sessionAmount}</td>
-        <td>${foodAmount}</td>
-        <td>${tipAmount}</td>
+        <td>${foodP1}</td>
+        <td>${foodP2}</td>
         <td>${totalAmount}</td>
         <td>${s.payment_method || '-'}</td>
         <td>${status}</td>
@@ -758,39 +773,107 @@ class App {
     const perMin = Math.round(minutes * this.getRatePerMinute(table));
     const amount = this.calculateBill(table, minutes, session.is_friendly);
 
+    const p1 = session.player_one_name || 'Player One';
+    const p2 = session.player_two_name || 'Player Two';
+
     document.getElementById('stop-table-id').value = tableId;
-    document.getElementById('stop-player-names').innerHTML = `
-      <div>${session.player_one_name || 'Player One'}</div>
-      <div>${session.player_two_name || 'Player Two'}</div>
-    `;
+
+    // Loser radio labels — actual player names
+    document.getElementById('loser-label-p1').textContent = p1;
+    document.getElementById('loser-label-p2').textContent = p2;
+
+    // Per-player food labels
+    document.getElementById('food-p1-name').textContent = p1;
+    document.getElementById('food-p1-name-items').textContent = p1;
+    document.getElementById('food-p2-name').textContent = p2;
+    document.getElementById('food-p2-name-items').textContent = p2;
+
     document.getElementById('session-summary').innerHTML = `
       <div class="summary-row"><span>Table</span><span>${this.getTableName(table)}</span></div>
+      <div class="summary-row"><span>Players</span><span>${p1} vs ${p2}</span></div>
       <div class="summary-row"><span>Duration</span><span>${minutes} minutes</span></div>
       <div class="summary-row"><span>Per-minute total</span><span>Rs.${perMin}</span></div>
-      <div class="summary-row summary-total"><span>Session bill</span><span>Rs.${amount}</span></div>
+      <div class="summary-row summary-total"><span>Game-time bill</span><span>Rs.${amount}</span></div>
     `;
-    document.getElementById('food-charge').value = '0';
-    document.getElementById('tip-amount').value = '0';
-    document.getElementById('food-items').value = '';
+
+    // Reset inputs
+    document.getElementById('food-charge-p1').value = '0';
+    document.getElementById('food-items-p1').value = '';
+    document.getElementById('food-charge-p2').value = '0';
+    document.getElementById('food-items-p2').value = '';
     document.querySelector('input[name="loser"][value="PLAYER_ONE"]').checked = true;
+
+    // Stash the game amount on the modal so previews can read it
+    this._stopCtx = { p1, p2, gameAmount: amount, isFriendly: !!session.is_friendly };
+    this._renderBillsPreview();
+
+    // Wire up live preview (idempotent — replace listeners by re-binding only once per open)
+    const update = () => this._renderBillsPreview();
+    ['food-charge-p1', 'food-items-p1', 'food-charge-p2', 'food-items-p2'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && !el.dataset.previewBound) {
+        el.addEventListener('input', update);
+        el.dataset.previewBound = '1';
+      }
+    });
+    document.querySelectorAll('input[name="loser"]').forEach((el) => {
+      if (!el.dataset.previewBound) {
+        el.addEventListener('change', update);
+        el.dataset.previewBound = '1';
+      }
+    });
+
     document.getElementById('stop-session-modal').classList.add('show');
+  }
+
+  _renderBillsPreview() {
+    const ctx = this._stopCtx;
+    const host = document.getElementById('bills-preview');
+    if (!ctx || !host) return;
+    const loser = document.querySelector('input[name="loser"]:checked')?.value || 'PLAYER_ONE';
+    const foodP1 = Math.max(0, Number(document.getElementById('food-charge-p1')?.value) || 0);
+    const foodP2 = Math.max(0, Number(document.getElementById('food-charge-p2')?.value) || 0);
+    const itemsP1 = (document.getElementById('food-items-p1')?.value || '').trim();
+    const itemsP2 = (document.getElementById('food-items-p2')?.value || '').trim();
+    const game = ctx.isFriendly ? 0 : ctx.gameAmount;
+    const gameP1 = loser === 'PLAYER_ONE' ? game : 0;
+    const gameP2 = loser === 'PLAYER_TWO' ? game : 0;
+    const totalP1 = gameP1 + foodP1;
+    const totalP2 = gameP2 + foodP2;
+    const renderBill = (name, role, gameAmt, foodAmt, items, testid) => `
+      <div class="bill-card ${role}" data-testid="${testid}">
+        <div class="bill-head"><span class="bill-name">${name}</span><span class="bill-role">${role === 'loser' ? 'Loser · pays game' : 'Winner'}</span></div>
+        <div class="bill-line"><span>Game time</span><span>Rs.${gameAmt}</span></div>
+        <div class="bill-line"><span>Food${items ? ` (${items})` : ''}</span><span>Rs.${foodAmt}</span></div>
+        <div class="bill-line bill-total"><span>Total</span><span>Rs.${gameAmt + foodAmt}</span></div>
+      </div>`;
+    host.innerHTML = `
+      <div class="bills-title">Two separate bills</div>
+      <div class="bills-grid">
+        ${renderBill(ctx.p1, loser === 'PLAYER_ONE' ? 'loser' : 'winner', gameP1, foodP1, itemsP1, 'bill-p1')}
+        ${renderBill(ctx.p2, loser === 'PLAYER_TWO' ? 'loser' : 'winner', gameP2, foodP2, itemsP2, 'bill-p2')}
+      </div>
+      <div class="bills-grand" data-testid="bills-grand-total">Combined session total: <strong>Rs.${totalP1 + totalP2}</strong></div>
+    `;
   }
 
   async confirmStop() {
     const tableId = Number(document.getElementById('stop-table-id').value);
     const loser = document.querySelector('input[name="loser"]:checked')?.value || 'PLAYER_ONE';
-    const foodCharge = Number(document.getElementById('food-charge').value) || 0;
-    const tipAmount = Number(document.getElementById('tip-amount').value) || 0;
-    const foodItems = document.getElementById('food-items').value.trim();
+    const foodP1 = Number(document.getElementById('food-charge-p1').value) || 0;
+    const itemsP1 = document.getElementById('food-items-p1').value.trim();
+    const foodP2 = Number(document.getElementById('food-charge-p2').value) || 0;
+    const itemsP2 = document.getElementById('food-items-p2').value.trim();
     const res = await fetch(`/api/table/${tableId}/stop`, {
       method: 'POST',
       headers: this.auth.getAuthHeaders(),
       body: JSON.stringify({
         payment_method: document.getElementById('final-payment-method').value,
         loser,
-        food_charge: foodCharge,
-        tip: tipAmount,
-        food_items: foodItems
+        food_charge_p1: foodP1,
+        food_items_p1: itemsP1,
+        food_charge_p2: foodP2,
+        food_items_p2: itemsP2
       })
     });
     if (res.status === 401) return this.auth.handleAuthError();
@@ -841,35 +924,92 @@ class App {
   }
 
   async sessionAction(tableId, action) {
-    const res = await fetch(`/api/table/${tableId}/${action}`, {
-      method: 'POST',
-      headers: this.auth.getAuthHeaders()
-    });
-    if (res.status === 401) return this.auth.handleAuthError();
-    if (!res.ok) {
-      const data = await res.json();
-      return this.toast(data.error || `Failed to ${action}`, 'error');
+    // Optimistic UI: lock the button immediately and toggle the visual state.
+    const card = document.querySelector(`.table-card[data-table-id="${tableId}"]`);
+    const actionsHost = card?.querySelector('.table-actions');
+    const clickedBtn = actionsHost?.querySelector(`button[data-action="${action}"]`);
+    if (clickedBtn) {
+      clickedBtn.classList.add('is-loading');
+      clickedBtn.disabled = true;
+      const label = clickedBtn.querySelector('.btn-label');
+      if (label) label.textContent = action === 'pause' ? 'Pausing…' : 'Resuming…';
     }
+    // Lock all action buttons on the card to prevent double-clicks.
+    actionsHost?.querySelectorAll('button.action-btn').forEach((b) => { b.disabled = true; });
 
     const table = this.tables.find((t) => t.id === tableId);
-    const session = this.sessions.find((s) => s.table_id === tableId && !s.end_time);
+    const session = (table && table.active_session)
+      || this.sessions.find((s) => s.table_id === tableId && !s.end_time);
 
+    // Snapshot previous state for revert on error.
+    const prevLastResume = session?.last_resume_time ?? null;
+    const prevDurationMs = session?.duration_ms ?? 0;
+
+    // Optimistically update local state and re-render the single card.
     if (table && session) {
-      const nextSession = {
-        ...session,
-        last_resume_time: action === 'pause' ? null : Date.now()
-      };
-      this.upsertSessionRecord(nextSession);
-      if (table.active_session) {
-        table.active_session = nextSession;
+      let nextSession = { ...session };
+      if (action === 'pause') {
+        const addedMs = prevLastResume ? Math.max(0, Date.now() - prevLastResume) : 0;
+        nextSession.duration_ms = (prevDurationMs || 0) + addedMs;
+        nextSession.last_resume_time = null;
+      } else {
+        nextSession.last_resume_time = Date.now();
       }
-      this.renderTables();
-      this.renderSessions();
-      this.renderActiveSessions();
-      this.updateStats();
+      this.upsertSessionRecord(nextSession);
+      table.active_session = nextSession;
+      this._rerenderTableCard(table);
     }
 
-    await this.refreshTableById(tableId);
+    try {
+      const res = await fetch(`/api/table/${tableId}/${action}`, {
+        method: 'POST',
+        headers: this.auth.getAuthHeaders()
+      });
+      if (res.status === 401) { this.auth.handleAuthError(); return; }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        // Revert optimistic update
+        if (table && session) {
+          const reverted = { ...session, last_resume_time: prevLastResume, duration_ms: prevDurationMs };
+          this.upsertSessionRecord(reverted);
+          table.active_session = reverted;
+          this._rerenderTableCard(table);
+        }
+        this.toast(data.error || `Failed to ${action} session`, 'error');
+        return;
+      }
+      this.toast(action === 'pause' ? 'Session paused' : 'Session resumed', 'success');
+    } catch (err) {
+      if (table && session) {
+        const reverted = { ...session, last_resume_time: prevLastResume, duration_ms: prevDurationMs };
+        this.upsertSessionRecord(reverted);
+        table.active_session = reverted;
+        this._rerenderTableCard(table);
+      }
+      this.toast(`Failed to ${action} session`, 'error');
+      return;
+    }
+
+    // Reconcile from server in the background (will no-op if already in sync).
+    this.refreshTableById(tableId).catch(() => undefined);
+    this.renderSessions();
+    this.renderActiveSessions();
+    this.updateStats();
+  }
+
+  _rerenderTableCard(table) {
+    const grid = document.getElementById('tables-grid');
+    const old = grid?.querySelector(`.table-card[data-table-id="${table.id}"]`);
+    if (!grid || !old) {
+      this.renderTables();
+      return;
+    }
+    if (this.timers.has(table.id)) {
+      clearInterval(this.timers.get(table.id));
+      this.timers.delete(table.id);
+    }
+    const next = this.createTableCard(table);
+    old.replaceWith(next);
   }
 
   async setStatus(tableId, status) {

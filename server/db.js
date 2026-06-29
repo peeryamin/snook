@@ -213,7 +213,11 @@ async function runAdditionalMigrations(db) {
       { name: 'food_charge', sql: "ALTER TABLE sessions ADD COLUMN food_charge INTEGER NOT NULL DEFAULT 0" },
       { name: 'tip', sql: "ALTER TABLE sessions ADD COLUMN tip INTEGER NOT NULL DEFAULT 0" },
       { name: 'food_items', sql: "ALTER TABLE sessions ADD COLUMN food_items TEXT" },
-      { name: 'payer_name', sql: "ALTER TABLE sessions ADD COLUMN payer_name TEXT" }
+      { name: 'payer_name', sql: "ALTER TABLE sessions ADD COLUMN payer_name TEXT" },
+      { name: 'food_charge_p1', sql: "ALTER TABLE sessions ADD COLUMN food_charge_p1 INTEGER NOT NULL DEFAULT 0" },
+      { name: 'food_items_p1', sql: "ALTER TABLE sessions ADD COLUMN food_items_p1 TEXT" },
+      { name: 'food_charge_p2', sql: "ALTER TABLE sessions ADD COLUMN food_charge_p2 INTEGER NOT NULL DEFAULT 0" },
+      { name: 'food_items_p2', sql: "ALTER TABLE sessions ADD COLUMN food_items_p2 TEXT" }
     ];
 
     for (const column of sessionColumns) {
