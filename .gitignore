@@ -11,3 +11,9 @@ node_modules/
 # SQLite local databases
 server/parlor.db*
 /tmp/parlor.db*
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
