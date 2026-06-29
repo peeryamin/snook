@@ -738,10 +738,14 @@ class App {
     this.toast('Session started', 'success');
     if (data.table && data.session) {
       this.patchTableFromApi(data.table, data.session);
+      this.upsertSessionRecord({ ...data.session, end_time: null, payment_status: 'PENDING' });
       this.renderTables();
+      this.renderSessions();
+      this.renderActiveSessions();
+      this.updateStats();
     }
     clearTimeout(this.loadDataTimer);
-    await this.refreshAuxiliaryData();
+    this.refreshAuxiliaryData().catch(() => undefined);
   }
 
   showStopModal(tableId) {
