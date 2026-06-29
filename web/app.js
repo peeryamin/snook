@@ -779,31 +779,85 @@ class App {
       return;
     }
 
-    const res = await fetch(`/api/table/${tableId}/start`, {
-      method: 'POST',
-      headers: this.auth.getAuthHeaders(),
-      body: JSON.stringify({
-        player_one_name,
-        player_two_name,
-        player_one_phone: phoneCheck.phone,
-        is_friendly: document.getElementById('is-friendly').checked
-      })
-    });
-    if (res.status === 401) return this.auth.handleAuthError();
-    const data = await res.json();
-    if (!res.ok) return this.toast(data.error || 'Failed to start session', 'error');
+    const isFriendly = document.getElementById('is-friendly').checked;
+    const table = this.tables.find((t) => t.id === tableId);
+
+    // === Optimistic UI: close modal + add session + flip table to OCCUPIED instantly ===
     document.getElementById('start-session-modal').classList.remove('show');
+
+    const startTime = Date.now();
+    const tempId = -startTime; // negative IDs avoid collisions with real ones
+    const tempSession = {
+      id: tempId,
+      table_id: tableId,
+      start_time: startTime,
+      last_resume_time: startTime,
+      duration_ms: 0,
+      paused_ms: 0,
+      is_friendly: isFriendly ? 1 : 0,
+      player_one_name,
+      player_two_name,
+      customer_name: `${player_one_name} vs ${player_two_name}`,
+      customer_phone: phoneCheck.phone,
+      end_time: null,
+      payment_status: 'PENDING',
+      break_count: 0,
+      table_name: table ? this.getTableName(table) : `Table ${tableId}`,
+      _optimistic: true
+    };
+    if (table) {
+      this.patchTableFromApi(
+        { ...table, status: 'OCCUPIED', light_on: 1, running_amount: 0 },
+        tempSession
+      );
+    }
+    this.upsertSessionRecord(tempSession);
+    this.renderTables();
+    this.renderSessions();
+    this.renderActiveSessions();
+    this.updateStats();
     this.toast('Session started', 'success');
-    if (data.table && data.session) {
-      this.patchTableFromApi(data.table, data.session);
-      this.upsertSessionRecord({ ...data.session, end_time: null, payment_status: 'PENDING' });
+
+    // === Background: confirm with server ===
+    try {
+      const res = await fetch(`/api/table/${tableId}/start`, {
+        method: 'POST',
+        headers: this.auth.getAuthHeaders(),
+        body: JSON.stringify({
+          player_one_name,
+          player_two_name,
+          player_one_phone: phoneCheck.phone,
+          is_friendly: isFriendly
+        })
+      });
+      if (res.status === 401) { this.auth.handleAuthError(); return; }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to start session');
+
+      // Swap temp session with the real one returned by the server.
+      this.sessions = this.sessions.filter((s) => s.id !== tempId);
+      if (data.session) {
+        this.upsertSessionRecord({ ...data.session, end_time: null, payment_status: 'PENDING' });
+      }
+      if (data.table) {
+        this.patchTableFromApi(data.table, data.session || null);
+      }
       this.renderTables();
       this.renderSessions();
       this.renderActiveSessions();
       this.updateStats();
+    } catch (err) {
+      // Revert optimistic state
+      this.sessions = this.sessions.filter((s) => s.id !== tempId);
+      if (table) {
+        this.patchTableFromApi({ ...table, status: 'AVAILABLE', light_on: 0 }, null);
+      }
+      this.renderTables();
+      this.renderSessions();
+      this.renderActiveSessions();
+      this.updateStats();
+      this.toast(err.message || 'Failed to start session', 'error');
     }
-    clearTimeout(this.loadDataTimer);
-    this.refreshAuxiliaryData().catch(() => undefined);
   }
 
   showStopModal(tableId) {
@@ -944,55 +998,166 @@ class App {
     const itemsP1 = document.getElementById('food-items-p1').value.trim();
     const foodP2 = Number(document.getElementById('food-charge-p2').value) || 0;
     const itemsP2 = document.getElementById('food-items-p2').value.trim();
-    const res = await fetch(`/api/table/${tableId}/stop`, {
-      method: 'POST',
-      headers: this.auth.getAuthHeaders(),
-      body: JSON.stringify({
-        payment_method: document.getElementById('final-payment-method').value,
-        loser,
-        food_charge_p1: foodP1,
-        food_items_p1: itemsP1,
-        food_charge_p2: foodP2,
-        food_items_p2: itemsP2
-      })
-    });
-    if (res.status === 401) return this.auth.handleAuthError();
-    const data = await res.json();
-    if (!res.ok) return this.toast(data.error || 'Failed to stop session', 'error');
+    const paymentMethod = document.getElementById('final-payment-method').value;
+
+    const table = this.tables.find((t) => t.id === tableId);
+    const session = (table && table.active_session)
+      || this.sessions.find((s) => s.table_id === tableId && !s.end_time);
+    if (!session) return;
+
+    // === Optimistic: close modal, move session to pending, free table ===
     document.getElementById('stop-session-modal').classList.remove('show');
-    this.toast(`Bill saved: Rs.${data.receipt?.amount || 0}. Mark as paid when money is received.`, 'success');
-    if (data.table) {
-      this.patchTableFromApi(data.table, null);
-      this.renderTables();
+
+    const endTime = Date.now();
+    const additionalMs = session.last_resume_time ? (endTime - session.last_resume_time) : 0;
+    const totalDurationMs = (session.duration_ms || 0) + additionalMs;
+    const billedMinutes = Math.max(0, Math.ceil(totalDurationMs / 60000));
+    const gameAmount = table ? this.calculateBill(table, billedMinutes, session.is_friendly) : 0;
+    const totalFood = foodP1 + foodP2;
+    const finalAmount = session.is_friendly ? 0 : gameAmount + totalFood;
+    const payerName = loser === 'PLAYER_ONE' ? session.player_one_name : session.player_two_name;
+    const paymentStatus = (session.is_friendly || finalAmount === 0) ? 'PAID' : 'PENDING';
+
+    const prevSession = { ...session };
+    const prevTable = table ? { ...table } : null;
+    const prevActive = table ? table.active_session : null;
+
+    const updatedSession = {
+      ...session,
+      end_time: endTime,
+      duration_ms: totalDurationMs,
+      billed_minutes: billedMinutes,
+      amount: finalAmount,
+      food_charge: totalFood,
+      food_charge_p1: foodP1,
+      food_items_p1: itemsP1,
+      food_charge_p2: foodP2,
+      food_items_p2: itemsP2,
+      loser,
+      payer_name: payerName,
+      payment_method: paymentMethod,
+      payment_status: paymentStatus,
+      table_name: table ? this.getTableName(table) : session.table_name,
+      _optimistic: true
+    };
+    this.upsertSessionRecord(updatedSession);
+    if (table) {
+      this.patchTableFromApi(
+        { ...table, status: 'AVAILABLE', light_on: 0, running_amount: 0 },
+        null
+      );
     }
-    if (data.session) {
-      this.upsertSessionRecord(data.session);
+
+    // Optimistic dashboard stats — bump session count & earnings locally so the
+    // top widgets update the instant the bill is saved (no waiting for /summary/today).
+    {
+      const s = this.todaySummary || {};
+      const next = {
+        ...s,
+        total_sessions: (s.total_sessions || 0) + 1,
+        friendly_games: (s.friendly_games || 0) + (session.is_friendly ? 1 : 0)
+      };
+      if (!session.is_friendly && finalAmount > 0) {
+        next.total_earnings = (s.total_earnings || 0) + finalAmount;
+        if (table && table.type === 'ENGLISH') next.english_earnings = (s.english_earnings || 0) + finalAmount;
+        if (table && table.type === 'FRENCH')  next.french_earnings  = (s.french_earnings  || 0) + finalAmount;
+        if (paymentMethod === 'CASH') next.cash_earnings = (s.cash_earnings || 0) + finalAmount;
+        if (paymentMethod === 'UPI')  next.upi_earnings  = (s.upi_earnings  || 0) + finalAmount;
+        if (paymentMethod === 'CARD') next.card_earnings = (s.card_earnings || 0) + finalAmount;
+      }
+      this.todaySummary = next;
+    }
+
+    this.renderTables();
+    this.renderSessions();
+    this.renderPending();
+    this.renderActiveSessions();
+    this.updateStats();
+    this.toast(`Bill saved: Rs.${finalAmount}. Mark as paid when money is received.`, 'success');
+
+    // === Background: confirm with server ===
+    try {
+      const res = await fetch(`/api/table/${tableId}/stop`, {
+        method: 'POST',
+        headers: this.auth.getAuthHeaders(),
+        body: JSON.stringify({
+          payment_method: paymentMethod,
+          loser,
+          food_charge_p1: foodP1,
+          food_items_p1: itemsP1,
+          food_charge_p2: foodP2,
+          food_items_p2: itemsP2
+        })
+      });
+      if (res.status === 401) { this.auth.handleAuthError(); return; }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to stop session');
+
+      if (data.session) this.upsertSessionRecord(data.session);
+      if (data.table) this.patchTableFromApi(data.table, null);
+      this.renderTables();
+      this.renderSessions();
+      this.renderPending();
+      this.updateStats();
+    } catch (err) {
+      // Revert optimistic state
+      this.upsertSessionRecord(prevSession);
+      if (table && prevTable) {
+        this.patchTableFromApi(prevTable, prevActive);
+      }
+      this.renderTables();
       this.renderSessions();
       this.renderPending();
       this.renderActiveSessions();
       this.updateStats();
+      this.toast(err.message || 'Failed to stop session', 'error');
     }
-    clearTimeout(this.loadDataTimer);
-    this.refreshAuxiliaryData().catch(() => undefined);
   }
 
   async markPaid(sessionId) {
-    const res = await fetch(`/api/session/${sessionId}/mark-paid`, {
-      method: 'POST',
-      headers: this.auth.getAuthHeaders()
+    const session = this.sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    if (session.payment_status === 'PAID') return;
+
+    // === Optimistic: flip status, disable buttons, re-render pending + history ===
+    const prevStatus = session.payment_status;
+    session.payment_status = 'PAID';
+    // Lock both pay-buttons for this session so users don't double-click.
+    document.querySelectorAll(`[data-session-id="${sessionId}"] .pending-pay-btn`).forEach((btn) => {
+      btn.disabled = true;
+      btn.classList.add('is-loading');
+      btn.textContent = 'Paid';
     });
-    if (res.status === 401) return this.auth.handleAuthError();
-    const data = await res.json();
-    if (!res.ok) return this.toast(data.error || 'Failed to update payment', 'error');
+    this.upsertSessionRecord(session);
+    this.renderPending();
+    this.renderSessions();
+    this.updateStats();
     this.toast('Payment confirmed', 'success');
-    if (data.session) {
-      this.upsertSessionRecord(data.session);
-      this.renderSessions();
+
+    // === Background: confirm with server ===
+    try {
+      const res = await fetch(`/api/session/${sessionId}/mark-paid`, {
+        method: 'POST',
+        headers: this.auth.getAuthHeaders()
+      });
+      if (res.status === 401) { this.auth.handleAuthError(); return; }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update payment');
+      if (data.session) {
+        this.upsertSessionRecord(data.session);
+        this.renderPending();
+        this.renderSessions();
+        this.updateStats();
+      }
+    } catch (err) {
+      // Revert
+      session.payment_status = prevStatus;
+      this.upsertSessionRecord(session);
       this.renderPending();
-      this.renderActiveSessions();
+      this.renderSessions();
       this.updateStats();
+      this.toast(err.message || 'Failed to mark as paid', 'error');
     }
-    this.refreshAuxiliaryData().catch(() => undefined);
   }
 
   async pauseSession(tableId) {
