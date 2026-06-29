@@ -7,3 +7,7 @@ node_modules/
 *.log
 .vercel
 .Rhistory
+
+# SQLite local databases
+server/parlor.db*
+/tmp/parlor.db*
